@@ -5,7 +5,10 @@ from mathutils import Vector
 import functools as ft
 from bonsai.bim.ifc import IfcStore
 import string
+import ifcopenshell.api as ifc_api
+from ifcopenshell.util.element import get_pset
 
+pset_name = "Pset_Numbering"
 _ifc_types = [("IfcElement", "All", "element")]
 
 def load_types(objects):
@@ -50,8 +53,8 @@ def get_select_types(self, context):
         _select_types = select_types
     return _select_types
 
-def get_tag(props, element_number=0, type_number=0, level_number=0, type_name="", max_number=100):
-    """Return the tag for the given element, type and level number."""
+def format_tag(props, element_number=0, type_number=0, level_number=0, type_name="", max_number=100):
+    """Return the tag for the given element, type and level number, following the format defined in the UI properties."""
     tag = props.format
     if "{E}" in tag:
         tag = tag.replace("{E}", to_numbering_string(props.initial_element_number + element_number, props.element_numbering, max_number))
@@ -90,6 +93,8 @@ def to_number(i):
 
 def to_number_ext(i, length=2):
     """Convert a number to a string with leading zeroes."""
+    if i < 0:
+        return "-" + to_number_ext(-i, length)
     res = str(i)
     while len(res) < length:
         res = "0" + res
@@ -97,6 +102,11 @@ def to_number_ext(i, length=2):
 
 def to_letter(i, upper=False):
     """Convert a number to a letter or sequence of letters."""
+    if i == 0:
+        return "0"
+    if i < 0:
+        return "-" + to_letter(-i, upper)
+
     num2alphadict = dict(zip(range(1, 27), string.ascii_uppercase if upper else string.ascii_lowercase))
     res = ""
     numloops = (i-1) // 26
@@ -105,11 +115,9 @@ def to_letter(i, upper=False):
         res = res + to_letter(numloops, upper)
         
     remainder = i % 26
-    if remainder > 0:
-        res = res + num2alphadict[remainder]
-    else:
-        res = res + "Z" if upper else "z"
-    return res
+    if remainder == 0:
+        remainder += 26
+    return res + num2alphadict[remainder]
 
 # Numbering systems
 # Dictionary to map numbering types to functions
@@ -127,6 +135,11 @@ def to_numbering_string(i, numbering_type, max_number):
         return to_number_ext(i, length)
     return numberings[numbering_type](i)
 
+def get_numbering_preview(numbering_type, initial):
+    """Get a preview of the numbering string for a given number and type."""
+    numbers = [to_numbering_string(i, numbering_type, 10) for i in range(initial, initial + 3)]
+    return "{0}, {1}, {2}, ...".format(*numbers)
+
 # Settings (user input fields)
 class IFC_TagSettings(bpy.types.PropertyGroup):
     selected_toggle: bpy.props.BoolProperty(
@@ -141,7 +154,6 @@ class IFC_TagSettings(bpy.types.PropertyGroup):
         items= get_select_types,
         options={'ENUM_FLAG'}
     )   # pyright: ignore[reportInvalidTypeForm]
-
 
     x_direction: bpy.props.EnumProperty(
         name="X",
@@ -195,7 +207,7 @@ class IFC_TagSettings(bpy.types.PropertyGroup):
             ("CENTER", "Center", "Use object center for sorting"),
             ("BOUNDING_BOX", "Bounding Box", "Use object bounding box for sorting"),
         ],
-        default="CENTER"
+        default="BOUNDING_BOX"
     ) # pyright: ignore[reportInvalidTypeForm]
 
     precision: bpy.props.IntVectorProperty(
@@ -224,32 +236,29 @@ class IFC_TagSettings(bpy.types.PropertyGroup):
         default=0
     ) # pyright: ignore[reportInvalidTypeForm]
 
-    numberings_enum = [
-            ("number", "1, 2, 3, ...", "Use numbers"),
-            ("number_ext", "01, 02, 03, ...", "Use numbers padded with zeroes to a fixed length based on the number of objects selected"),
-            ("lower_letter", "a, b, c, ...", "Use lowercase letters, continuing with aa, ab, ..."),
-            ("upper_letter", "A, B, C, ...", "Use uppercase letters, continuing with AA, AB, ..."),
+    numberings_enum = lambda self, initial : [
+            ("number", get_numbering_preview("number", initial), "Use numbers"),
+            ("number_ext", get_numbering_preview("number_ext", initial), "Use numbers padded with zeroes to a fixed length based on the number of objects selected"),
+            ("lower_letter", get_numbering_preview("lower_letter", initial), "Use lowercase letters, continuing with aa, ab, ..."),
+            ("upper_letter", get_numbering_preview("upper_letter", initial), "Use uppercase letters, continuing with AA, AB, ..."),
     ]
 
     element_numbering: bpy.props.EnumProperty(
         name="{E}",
         description="Select numbering system for element numbering",
-        items=numberings_enum,
-        default=numberings_enum[0][0]
+        items=lambda self, context: self.numberings_enum(self.initial_element_number)
     )    # pyright: ignore[reportInvalidTypeForm]
 
     type_numbering: bpy.props.EnumProperty(
         name="{T}",
         description="Select numbering system for numbering within types",
-        items=numberings_enum,
-        default=numberings_enum[0][0]
+        items=lambda self, context: self.numberings_enum(self.initial_type_number)
     )    # pyright: ignore[reportInvalidTypeForm]
 
     level_numbering: bpy.props.EnumProperty(
         name="{L}",
         description="Select numbering system for numbering levels",
-        items=numberings_enum,
-        default=numberings_enum[0][0]
+        items=lambda self, context: self.numberings_enum(self.initial_level_number)
     )    # pyright: ignore[reportInvalidTypeForm]
 
     format: bpy.props.StringProperty(
@@ -261,6 +270,14 @@ class IFC_TagSettings(bpy.types.PropertyGroup):
         "[T]: first letter of type name\n" \
         "[TF]: full type name",
         default="E{E}[T]{T}"
+    ) # pyright: ignore[reportInvalidTypeForm]
+
+    save_prop : bpy.props.EnumProperty(
+        name="Store tag in",
+        items = [("Tag", "Tag", "Store in IFC Tag property"),
+                 ("Pset", "Pset", "Store in occurrence property set called " + pset_name)
+        ],
+        default = "Tag"
     ) # pyright: ignore[reportInvalidTypeForm]
 
     remove_toggle: bpy.props.BoolProperty(
@@ -304,8 +321,9 @@ class IFC_TagSettings(bpy.types.PropertyGroup):
    
         row = layout.row(align=False)
         row.prop(self, "format")
-        row.label(text="Preview: " + get_tag(self, 0, 0, 0, get_type_name(self), len(bpy.context.selected_objects if self.selected_toggle else bpy.context.scene.objects)))
+        row.label(text="Preview: " + format_tag(self, 0, 0, 0, get_type_name(self), len(bpy.context.selected_objects if self.selected_toggle else bpy.context.scene.objects)))
 
+        layout.prop(self, "save_prop")
         layout.prop(self, "remove_toggle", text="Remove existing tags")
         layout.operator("ifc.assign_tag", icon="TAG", text="Assign tags")
 
@@ -355,9 +373,41 @@ def cmp_within_precision(a, b, props, use_dir=True):
             return 1 if diff > 0 else -1
     return 0
 
+def get_tag(object):
+    element = tool.Ifc.get_entity(object)
+    tag, prop = None, None    
+    if hasattr(element, "Tag"):
+        tag = element.Tag
+    if pset := get_pset(element, pset_name):
+        prop = pset.get("Number")
+    return (tag, prop)
+
+def set_tag(element, tag, ifc_file, save_prop=(True, True)):
+    count = 0
+    if save_prop[0] and hasattr(element, "Tag"):
+        count += element.Tag != tag[0]
+        element.Tag = tag[0]
+    if save_prop[1]:
+        if pset := get_pset(element, pset_name):
+            count += pset.get("Number") != tag[1]
+            pset = ifc_file.by_id(pset["id"])  
+        else:
+            count += tag[1] is not None
+            pset = ifc_api.run("pset.add_pset", ifc_file, product=element, name=pset_name)
+        
+        if tag[1] is None:
+            ifc_api.run("pset.remove_pset", ifc_file, product=element, pset=pset)
+        else:    
+            ifc_api.run("pset.edit_pset", ifc_file, pset=pset, properties={"Number": tag[1]})
+            
+    return count
+
+    
 def assign_tags(self, context):
     """Assign tags to selected objects based on their IFC type and location."""
 
+    ifc_file = IfcStore.get_file()
+    
     props = context.scene.ifc_tag_settings
     tag_count = 0
     remove_count = 0
@@ -366,16 +416,14 @@ def assign_tags(self, context):
         #Remove existing tags
         for obj in bpy.context.scene.objects:
             element = tool.Ifc.get_entity(obj)
-            if hasattr(element, "Tag"):
-                if element.Tag != "":
-                    remove_count+=1
-                element.Tag = ""
+            if element is not None:
+                remove_count += set_tag(element, (None, None), ifc_file, (props.save_prop=="Tag", props.save_prop=="Pset"))
         self.report({'INFO'}, f"Removed {remove_count} existing tags")
 
     objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
     
     if not objects:
-        self.report({'WARNING'}, "No objects selected or available for tagging.")
+        self.report({'WARNING'}, f"No objects selected or available for tagging, removed {remove_count} existing tags.")
         return {'CANCELLED'}
 
     elements = []
@@ -384,10 +432,10 @@ def assign_tags(self, context):
         if element is not None and any([element.is_a(t) for t in props.selected_types]):
             location = get_object_location(obj, props)
             dimensions = get_object_dimensions(obj)
-            elements.append((element, location, dimensions))
+            elements.append((element, location, dimensions, obj.name))
 
     if not elements:
-        self.report({'WARNING'}, "No elements selected or available for tagging.")
+        self.report({'WARNING'}, f"No elements selected or available for tagging, removed {remove_count} existing tags.")
         return {'CANCELLED'}
     
     elements.sort(key=ft.cmp_to_key(lambda a, b: cmp_within_precision(a[2], b[2], props, use_dir=False)))
@@ -397,28 +445,31 @@ def assign_tags(self, context):
     elements_by_type = [[element[0] for element in elements if element[0].is_a(ifc_type)] 
                         for ifc_type in ifc_types]
 
-    for (element_number, (element, _, _)) in enumerate(elements):
-        if hasattr(element, "Tag"):
+    for (element_number, (element, _, _, name)) in enumerate(elements):
 
-            type_index = ifc_types.index(element.is_a())
-            type_number = elements_by_type[type_index].index(element)
-            type_name = ifc_types[type_index][3:]
+        type_index = ifc_types.index(element.is_a())
+        type_number = elements_by_type[type_index].index(element)
+        type_name = ifc_types[type_index][3:]
 
-            element.Tag = get_tag(props, element_number, type_number, type_name=type_name, max_number=len(objects))
-            tag_count += 1
+        tag = format_tag(props, element_number, type_number, type_name=type_name, max_number=len(objects))
+
+        tag_count += set_tag(element, (tag, tag), ifc_file, (props.save_prop=="Tag", props.save_prop=="Pset"))
 
     self.report({'INFO'}, f"Assigned tag to {tag_count} objects")
 
     #Check for duplicate tags
     tags = []
+    pset_tags = []
     for obj in bpy.context.scene.objects:
+        tag, pset_tag = get_tag(obj)
         element = tool.Ifc.get_entity(obj)
-        if hasattr(element, "Tag"):
-            if element.Tag in tags:
-                self.report({'WARNING'}, f"The model contains duplicate tags")
-                break
-            elif element.Tag != "":
-                tags.append(element.Tag)
+        if tag in tags or pset_tag in pset_tags:
+            self.report({'WARNING'}, f"The model contains duplicate tags")
+            break
+        if tag is not None:
+            tags.append(tag)
+        if pset_tag is not None:
+            pset_tags.append(pset_tag)
 
     return {'FINISHED'}
 
@@ -430,10 +481,9 @@ class IFC_AssignTag(bpy.types.Operator):
 
     def execute(self, context):
         IfcStore.begin_transaction(self)
-        elements = [tool.Ifc.get_entity(obj) for obj in bpy.context.scene.objects]
-        old_value = {el: el.Tag for el in elements if hasattr(el, "Tag")}
+        old_value = {obj.name: get_tag(obj) for obj in bpy.context.scene.objects}
         result = assign_tags(self, context)
-        new_value = {el: el.Tag for el in elements if hasattr(el, "Tag")}
+        new_value = {obj.name: get_tag(obj) for obj in bpy.context.scene.objects}
         self.transaction_data = {"old_value": old_value, "new_value": new_value}
         IfcStore.add_transaction_operation(self)
         IfcStore.end_transaction(self)
@@ -441,25 +491,20 @@ class IFC_AssignTag(bpy.types.Operator):
 
     def rollback(self, data):
         rollback_count = 0
-        elements = [tool.Ifc.get_entity(obj) for obj in bpy.context.scene.objects]
-        for element in elements:
-            if hasattr(element, "Tag"):
-                old_tag = data["old_value"][element]
-                if element.Tag != old_tag:
-                    element.Tag = old_tag
-                    rollback_count += 1
+        for obj in bpy.context.scene.objects:
+            old_tag = data["old_value"][obj.name]
+            if old_tag != get_tag(obj):
+                set_tag(tool.Ifc.get_entity(obj), old_tag, IfcStore.get_file())
+                rollback_count += 1
         print(f"Rollback {rollback_count} tags.")
 
     def commit(self, data):
         commit_count = 0
-        elements = [tool.Ifc.get_entity(obj) for obj in bpy.context.scene.objects]
-        for element in elements:
-            if hasattr(element, "Tag"):
-                new_tag = data["new_value"][element]
-                if element.Tag != new_tag:
-                    element.Tag = new_tag
-                    commit_count += 1
-                element.Tag = data["new_value"][element]
+        for obj in bpy.context.scene.objects:
+            new_tag = data["new_value"][obj.name]
+            if new_tag != get_tag(obj):
+                set_tag(tool.Ifc.get_entity(obj), new_tag, IfcStore.get_file())
+                commit_count += 1
         print(f"Commit {commit_count} tags.")
 
 
