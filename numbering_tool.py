@@ -54,11 +54,11 @@ def get_tag(props, element_number=0, type_number=0, level_number=0, type_name=""
     """Return the tag for the given element, type and level number."""
     tag = props.format
     if "{E}" in tag:
-        tag = tag.replace("{E}", numberings[props.element_numbering](props.initial_element_number + element_number))
+        tag = tag.replace("{E}", to_numbering_string(props.initial_element_number + element_number, props.element_numbering, max_number))
     if "{T}" in tag:
-        tag = tag.replace("{T}", numberings[props.type_numbering](props.initial_type_number + type_number))
+        tag = tag.replace("{T}", to_numbering_string(props.initial_type_number + type_number, props.type_numbering, max_number))
     if "{L}" in tag:
-        tag = tag.replace("{L}", numberings[props.level_numbering](props.initial_level_number + level_number))
+        tag = tag.replace("{L}", to_numbering_string(props.initial_level_number + level_number, props.level_numbering, max_number))
     if "[T]" in tag and len(type_name) > 0:
         tag = tag.replace("[T]", type_name[0])
     if "[TF]" in tag:
@@ -126,7 +126,6 @@ def to_numbering_string(i, numbering_type, max_number):
         length = len(str(max_number))
         return to_number_ext(i, length)
     return numberings[numbering_type](i)
-
 
 # Settings (user input fields)
 class IFC_TagSettings(bpy.types.PropertyGroup):
@@ -227,7 +226,7 @@ class IFC_TagSettings(bpy.types.PropertyGroup):
 
     numberings_enum = [
             ("number", "1, 2, 3, ...", "Use numbers"),
-            ("number_ext", "01, 02, 03, ...", "Use numbers padded with zeroes"),
+            ("number_ext", "01, 02, 03, ...", "Use numbers padded with zeroes to a fixed length based on the number of objects selected"),
             ("lower_letter", "a, b, c, ...", "Use lowercase letters, continuing with aa, ab, ..."),
             ("upper_letter", "A, B, C, ...", "Use uppercase letters, continuing with AA, AB, ..."),
     ]
