@@ -8,6 +8,8 @@ import string
 import ifcopenshell.api as ifc_api
 from ifcopenshell.util.element import get_pset
 
+import time
+
 pset_name = "Pset_Numbering"
 _ifc_types = [("IfcElement", "All", "element")]
 
@@ -292,7 +294,9 @@ class IFC_TagSettings(bpy.types.PropertyGroup):
         row = layout.row(align=False)
         row.label(text= "Elements to tag:")
         row.prop(self, "selected_toggle")
-        layout.prop(self, "selected_types")
+
+        rows = layout.grid_flow(row_major=True, align=True, columns=4)
+        rows.prop(self, "selected_types", expand=True)
 
         layout.label(text="Tagging order:")
         row = layout.row(align=False)
@@ -393,8 +397,7 @@ def set_tag(element, tag, ifc_file, save_prop=(True, True)):
             pset = ifc_file.by_id(pset["id"])  
         else:
             count += tag[1] is not None
-            pset = ifc_api.run("pset.add_pset", ifc_file, product=element, name=pset_name)
-        
+            pset = ifc_api.run("pset.add_pset", ifc_file, product=element, name=pset_name)        
         if tag[1] is None:
             ifc_api.run("pset.remove_pset", ifc_file, product=element, pset=pset)
         else:    
@@ -416,7 +419,7 @@ def assign_tags(self, context):
         #Remove existing tags
         for obj in bpy.context.scene.objects:
             element = tool.Ifc.get_entity(obj)
-            if element is not None:
+            if element is not None and element.is_a("IfcElement"):
                 remove_count += set_tag(element, (None, None), ifc_file, (props.save_prop=="Tag", props.save_prop=="Pset"))
         self.report({'INFO'}, f"Removed {remove_count} existing tags")
 
@@ -426,32 +429,53 @@ def assign_tags(self, context):
         self.report({'WARNING'}, f"No objects selected or available for tagging, removed {remove_count} existing tags.")
         return {'CANCELLED'}
 
+    selected_types = props.selected_types
+    if "IfcElement" in selected_types:
+        selected_types = [tupl[0] for tupl in _select_types]
+
     elements = []
+    storeys = []
     for obj in objects: 
         element = tool.Ifc.get_entity(obj)
-        if element is not None and any([element.is_a(t) for t in props.selected_types]):
+        if element is None:
+            continue
+        if element.is_a() in selected_types:
             location = get_object_location(obj, props)
             dimensions = get_object_dimensions(obj)
-            elements.append((element, location, dimensions, obj.name))
+            elements.append((element, location, dimensions))
+        if element is not None and element.is_a("IfcBuildingStorey"):
+            location = get_object_location(obj, props)
+            storeys.append((element, location))
 
     if not elements:
         self.report({'WARNING'}, f"No elements selected or available for tagging, removed {remove_count} existing tags.")
         return {'CANCELLED'}
     
     elements.sort(key=ft.cmp_to_key(lambda a, b: cmp_within_precision(a[2], b[2], props, use_dir=False)))
+
     elements.sort(key=ft.cmp_to_key(lambda a, b: cmp_within_precision(a[1], b[1], props)))
+
+    storeys.sort(key=ft.cmp_to_key(lambda a, b: cmp_within_precision(a[1], b[1], props)))
+    storeys = [storey[0] for storey in storeys]  # Extract only the IfcBuildingStorey entities
 
     ifc_types = [t[0] for t in load_types(objects)[0]]
     elements_by_type = [[element[0] for element in elements if element[0].is_a(ifc_type)] 
                         for ifc_type in ifc_types]
 
-    for (element_number, (element, _, _, name)) in enumerate(elements):
+    
+    for (element_number, (element, _, _)) in enumerate(elements):
 
         type_index = ifc_types.index(element.is_a())
         type_number = elements_by_type[type_index].index(element)
         type_name = ifc_types[type_index][3:]
 
-        tag = format_tag(props, element_number, type_number, type_name=type_name, max_number=len(objects))
+        if structure := element.ContainedInStructure:
+            storey = structure[0].RelatingStructure
+            level_number = storeys.index(storey) if storey in storeys else 0
+        elif "{L}" in props.format:
+            self.report({'WARNING'}, f"Element {element.Name} with ID {element.GlobalId} is not contained in any storey.")
+
+        tag = format_tag(props, element_number, type_number, level_number, type_name=type_name, max_number=len(objects))
 
         tag_count += set_tag(element, (tag, tag), ifc_file, (props.save_prop=="Tag", props.save_prop=="Pset"))
 
@@ -481,9 +505,9 @@ class IFC_AssignTag(bpy.types.Operator):
 
     def execute(self, context):
         IfcStore.begin_transaction(self)
-        old_value = {obj.name: get_tag(obj) for obj in bpy.context.scene.objects}
+        old_value = {obj.name: get_tag(obj) for obj in bpy.context.scene.objects if tool.Ifc.get_entity(obj).is_a("IfcElement")}
         result = assign_tags(self, context)
-        new_value = {obj.name: get_tag(obj) for obj in bpy.context.scene.objects}
+        new_value = {obj.name: get_tag(obj) for obj in bpy.context.scene.objects if tool.Ifc.get_entity(obj).is_a("IfcElement")}
         self.transaction_data = {"old_value": old_value, "new_value": new_value}
         IfcStore.add_transaction_operation(self)
         IfcStore.end_transaction(self)
