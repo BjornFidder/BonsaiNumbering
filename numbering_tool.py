@@ -11,17 +11,15 @@ from ifcopenshell.util.element import get_pset
 import time
 
 pset_name = "Pset_Numbering"
-_ifc_types = [("IfcElement", "All", "element")]
 
 def load_types(objects):
     """Load the available IFC types from the selected objects."""
-    global _ifc_types
     if not objects:
-        return _ifc_types, {"IfcElement": 0}
+        return ifc_types, {"IfcElement": 0}
     
     ifc_types = [("IfcElement", "All", "element")]
     seen_types = []
-    tag_counts = {"IfcElement": 0}
+    number_counts = {"IfcElement": 0}
 
     for obj in objects:
         element = tool.Ifc.get_entity(obj)
@@ -32,47 +30,52 @@ def load_types(objects):
         if ifc_type not in seen_types:
             seen_types.append(ifc_type) 
             ifc_types.append((ifc_type, ifc_type[3:], ifc_type[3:].lower())) # Store type as (id, name, name_lower)
-            tag_counts[ifc_type] = 0
+            number_counts[ifc_type] = 0
 
-        tag_counts["IfcElement"] += 1
-        tag_counts[ifc_type] += 1
+        number_counts["IfcElement"] += 1
+        number_counts[ifc_type] += 1
             
     ifc_types.sort(key=lambda ifc_type: ifc_type[0] if ifc_type[0] != "IfcElement" else "") #Sort types alphabetically, but keeping IfcElement at index 0
     
-    return ifc_types, tag_counts
+    return ifc_types, number_counts
 
-_select_types = []
+_possible_types = []
 
-def get_select_types(self, context):
+def get_possible_types(self, context):
     """Return the list of available types for selection."""
-    global _select_types
+    global _possible_types
 
-    props = context.scene.ifc_tag_settings
+    props = context.scene.ifc_numbering_settings
     objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
-    ifc_types, tag_counts = load_types(objects)
-    select_types = [(id, name + f": {tag_counts[id]}", "") for (id, name, _) in ifc_types]
-    if select_types != _select_types:
-        _select_types = select_types
-    return _select_types
+    ifc_types, number_counts = load_types(objects)
+    possible_types = [(id, name + f": {number_counts[id]}", "") for (id, name, _) in ifc_types]
+    if possible_types != _possible_types:
+        _possible_types = possible_types
+    return _possible_types
 
-def format_tag(props, element_number=0, type_number=0, level_number=0, type_name="", max_number=100):
-    """Return the tag for the given element, type and level number, following the format defined in the UI properties."""
+def format_number(props, element_number=0, type_number=0, level_number=None, type_name="", max_number=100):
+    """Return the formatted number for the given element, type and level number"""
     tag = props.format
     if "{E}" in tag:
         tag = tag.replace("{E}", to_numbering_string(props.initial_element_number + element_number, props.element_numbering, max_number))
     if "{T}" in tag:
         tag = tag.replace("{T}", to_numbering_string(props.initial_type_number + type_number, props.type_numbering, max_number))
     if "{L}" in tag:
-        tag = tag.replace("{L}", to_numbering_string(props.initial_level_number + level_number, props.level_numbering, max_number))
+        if level_number is not None:
+            tag = tag.replace("{L}", to_numbering_string(props.initial_level_number + level_number, props.level_numbering, max_number))
+        else:
+            tag = tag.replace("{L}", "x")
     if "[T]" in tag and len(type_name) > 0:
         tag = tag.replace("[T]", type_name[0])
+    if "[TT]" in tag and len(type_name) > 1:
+        tag = tag.replace("[TT]", "".join([c for c in type_name if c.isupper()]))
     if "[TF]" in tag:
         tag = tag.replace("[TF]", type_name)
     return tag
 
 def get_type_name(props):
     """Return type name used in preview, based on selected types"""
-    global _select_types
+    global _possible_types
     if not props.selected_types:
         #If no types selected, return "Type"
         return "Type"
@@ -83,9 +86,9 @@ def get_type_name(props):
     if len(types)>0:
         return str(list(types)[0][3:])
     #If all selected, return type name of one of the selected types
-    all_types = _select_types
-    if len(_select_types) > 1:
-        return str(_select_types[1][0][3:])
+    all_types = _possible_types
+    if len(_possible_types) > 1:
+        return str(_possible_types[1][0][3:])
     #If none selected, return "Type"
     return "Type"
 
@@ -143,26 +146,26 @@ def get_numbering_preview(numbering_type, initial):
     return "{0}, {1}, {2}, ...".format(*numbers)
 
 # Settings (user input fields)
-class IFC_TagSettings(bpy.types.PropertyGroup):
+class IFC_NumberingSettings(bpy.types.PropertyGroup):
     selected_toggle: bpy.props.BoolProperty(
         name="Selected only",
-        description="Only tag selected objects",
+        description="Only number selected objects",
         default=False
     ) # pyright: ignore[reportInvalidTypeForm]
 
     selected_types: bpy.props.EnumProperty(
         name="Of type",
-        description="Select which types of elements to tag",
-        items= get_select_types,
+        description="Select which types of elements to number",
+        items= get_possible_types,
         options={'ENUM_FLAG'}
     )   # pyright: ignore[reportInvalidTypeForm]
 
     x_direction: bpy.props.EnumProperty(
         name="X",
-        description="Select axis direction for tagging elements",
+        description="Select axis direction for numbering elements",
         items=[
-            ("1", "+", "Tag elements in positive X direction"),
-            ("-1", "-", "Tag elements in negative X direction")
+            ("1", "+", "Number elements in positive X direction"),
+            ("-1", "-", "Number elements in negative X direction")
         ],
         default="1",
 
@@ -170,40 +173,40 @@ class IFC_TagSettings(bpy.types.PropertyGroup):
 
     y_direction: bpy.props.EnumProperty(
         name="Y",
-        description="Select axis direction for tagging elements",
+        description="Select axis direction for numbering elements",
         items=[
-            ("1", "+", "Tag elements in positive Y direction"),
-            ("-1", "-", "Tag elements in negative Y direction")
+            ("1", "+", "Number elements in positive Y direction"),
+            ("-1", "-", "Number elements in negative Y direction")
         ],
-        default="-1"
+        default="1"
     )    # pyright: ignore[reportInvalidTypeForm]
 
     z_direction: bpy.props.EnumProperty(
         name="Z",
-        description="Select axis direction for tagging elements",
+        description="Select axis direction for numbering elements",
         items=[
-            ("1", "+", "Tag elements in positive Z direction"),
-            ("-1", "-", "Tag elements in negative Z direction")
+            ("1", "+", "Number elements in positive Z direction"),
+            ("-1", "-", "Number elements in negative Z direction")
         ],
         default="1"
     )    # pyright: ignore[reportInvalidTypeForm]
 
     axis_order: bpy.props.EnumProperty(
         name="Axis order",
-        description="Order of axes in tagging elements",
+        description="Order of axes in numbering elements",
         items=[
-            ("XYZ", "X, Y, Z", "Tag elements in X, Y, Z order"),
-            ("XZY", "X, Z, Y", "Tag elements in X, Z, Y order"),
-            ("YXZ", "Y, X, Z", "Tag elements in Y, X, Z order"),
-            ("YZX", "Y, Z, X", "Tag elements in Y, Z, X order"),
-            ("ZXY", "Z, X, Y", "Tag elements in Z, X, Y order"),
-            ("ZYX", "Z, Y, X", "Tag elements in Z, Y, X order")
+            ("XYZ", "X, Y, Z", "Number elements in X, Y, Z order"),
+            ("XZY", "X, Z, Y", "Number elements in X, Z, Y order"),
+            ("YXZ", "Y, X, Z", "Number elements in Y, X, Z order"),
+            ("YZX", "Y, Z, X", "Number elements in Y, Z, X order"),
+            ("ZXY", "Z, X, Y", "Number elements in Z, X, Y order"),
+            ("ZYX", "Z, Y, X", "Number elements in Z, Y, X order")
         ],
         default="ZYX"
     ) # pyright: ignore[reportInvalidTypeForm]
 
     location_type: bpy.props.EnumProperty(
-        name="Location",
+        name="Reference location",
         description="Location to use for sorting elements",
         items=[
             ("CENTER", "Center", "Use object center for sorting"),
@@ -275,16 +278,22 @@ class IFC_TagSettings(bpy.types.PropertyGroup):
     ) # pyright: ignore[reportInvalidTypeForm]
 
     save_prop : bpy.props.EnumProperty(
-        name="Store tag in",
-        items = [("Tag", "Tag", "Store in IFC Tag property"),
-                 ("Pset", "Pset", "Store in occurrence property set called " + pset_name)
+        name="Store number in",
+        items = [("Tag", "Tag", "Store number in IFC Tag property"),
+                 ("Pset", "Pset", "Store number in occurrence property set called " + pset_name)
         ],
         default = "Tag"
     ) # pyright: ignore[reportInvalidTypeForm]
 
     remove_toggle: bpy.props.BoolProperty(
-        name="Remove tags",
-        description="Remove existing tags from objects",
+        name="Remove numbers from unselected objects",
+        description="Remove numbers from unselected objects in the scene",
+        default=True
+    ) # pyright: ignore[reportInvalidTypeForm]
+
+    check_duplicates_toggle: bpy.props.BoolProperty(
+        name="Check for duplicate numbers",
+        description="Check for duplicate numbers in all objects in the scene",
         default=True
     ) # pyright: ignore[reportInvalidTypeForm]
 
@@ -292,18 +301,19 @@ class IFC_TagSettings(bpy.types.PropertyGroup):
     def draw(self, layout):
 
         row = layout.row(align=False)
-        row.label(text= "Elements to tag:")
+        row.label(text= "Elements to number:")
         row.prop(self, "selected_toggle")
 
         rows = layout.grid_flow(row_major=True, align=True, columns=4)
         rows.prop(self, "selected_types", expand=True)
 
-        layout.label(text="Tagging order:")
+        layout.label(text="Axis direction:")
         row = layout.row(align=False)
         row.prop(self, "x_direction", text="X")
         row.prop(self, "y_direction", text="Y")
         row.prop(self, "z_direction", text="Z")
         layout.prop(self, "axis_order")
+        
         layout.prop(self, "location_type")
 
         layout.label(text="Precision in mm:")
@@ -325,11 +335,12 @@ class IFC_TagSettings(bpy.types.PropertyGroup):
    
         row = layout.row(align=False)
         row.prop(self, "format")
-        row.label(text="Preview: " + format_tag(self, 0, 0, 0, get_type_name(self), len(bpy.context.selected_objects if self.selected_toggle else bpy.context.scene.objects)))
-
+        row.label(text="Preview: " + format_number(self, 0, 0, 0, get_type_name(self), len(bpy.context.selected_objects if self.selected_toggle else bpy.context.scene.objects)))
+    
         layout.prop(self, "save_prop")
-        layout.prop(self, "remove_toggle", text="Remove existing tags")
-        layout.operator("ifc.assign_tag", icon="TAG", text="Assign tags")
+        layout.prop(self, "remove_toggle")
+        layout.prop(self, "check_duplicates_toggle")
+        layout.operator("ifc.assign_number", icon="TAG", text="Assign numbers")
 
 # 2. Operator (button logic)
 
@@ -377,61 +388,63 @@ def cmp_within_precision(a, b, props, use_dir=True):
             return 1 if diff > 0 else -1
     return 0
 
-def get_tag(object):
+def get_number(object, save_prop=(True, True)):
     element = tool.Ifc.get_entity(object)
     tag, prop = None, None    
-    if hasattr(element, "Tag"):
+    if save_prop[0] and hasattr(element, "Tag"):
         tag = element.Tag
-    if pset := get_pset(element, pset_name):
+    if save_prop[1] and (pset := get_pset(element, pset_name)):
         prop = pset.get("Number")
     return (tag, prop)
 
-def set_tag(element, tag, ifc_file, save_prop=(True, True)):
+def set_number(element, number, ifc_file, save_prop=(True, True)):
     count = 0
     if save_prop[0] and hasattr(element, "Tag"):
-        count += element.Tag != tag[0]
-        element.Tag = tag[0]
+        count += element.Tag != number[0]
+        element.Tag = number[0]
     if save_prop[1]:
         if pset := get_pset(element, pset_name):
-            count += pset.get("Number") != tag[1]
+            count += pset.get("Number") != number[1]
             pset = ifc_file.by_id(pset["id"])  
         else:
-            count += tag[1] is not None
-            pset = ifc_api.run("pset.add_pset", ifc_file, product=element, name=pset_name)        
-        if tag[1] is None:
+            count += number[1] is not None
+            pset = ifc_api.run("pset.add_pset", ifc_file, product=element, name=pset_name) 
+        if number[1] is None:
             ifc_api.run("pset.remove_pset", ifc_file, product=element, pset=pset)
         else:    
-            ifc_api.run("pset.edit_pset", ifc_file, pset=pset, properties={"Number": tag[1]})
-            
+            ifc_api.run("pset.edit_pset", ifc_file, pset=pset, properties={"Number": number[1]})
     return count
 
+def remove_number(element, ifc_file, save_prop):
+    return set_number(element, (None, None), ifc_file, (save_prop=="Tag", save_prop=="Pset"))
+
     
-def assign_tags(self, context):
-    """Assign tags to selected objects based on their IFC type and location."""
+def assign_numbers(self, context):
+    """Assign numbers to selected objects based on their IFC type and location."""
 
     ifc_file = IfcStore.get_file()
     
-    props = context.scene.ifc_tag_settings
-    tag_count = 0
+    props = context.scene.ifc_numbering_settings
+    number_count = 0
     remove_count = 0
-
     if props.remove_toggle:
-        #Remove existing tags
+        #Remove existing numbers
         for obj in bpy.context.scene.objects:
-            element = tool.Ifc.get_entity(obj)
-            if element is not None and element.is_a("IfcElement"):
-                remove_count += set_tag(element, (None, None), ifc_file, (props.save_prop=="Tag", props.save_prop=="Pset"))
-        self.report({'INFO'}, f"Removed {remove_count} existing tags")
+            if props.selected_toggle and obj not in bpy.context.selected_objects:
+                element = tool.Ifc.get_entity(obj)
+                if element is not None and element.is_a("IfcElement"):
+                    remove_count += remove_number(element, ifc_file, props.save_prop)
 
     objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
     
     if not objects:
-        self.report({'WARNING'}, f"No objects selected or available for tagging, removed {remove_count} existing tags.")
+        self.report({'WARNING'}, f"No objects selected or available for numbering, removed {remove_count} existing numbers.")
         return {'CANCELLED'}
-
+    
     selected_types = props.selected_types
+    possible_types = [tupl[0] for tupl in _possible_types]
     if "IfcElement" in selected_types:
-        selected_types = [tupl[0] for tupl in _select_types]
+        selected_types = possible_types
 
     elements = []
     storeys = []
@@ -443,14 +456,16 @@ def assign_tags(self, context):
             location = get_object_location(obj, props)
             dimensions = get_object_dimensions(obj)
             elements.append((element, location, dimensions))
+        elif props.remove_toggle and element.is_a() in possible_types:
+            remove_count += remove_number(element, ifc_file, props.save_prop)
         if element is not None and element.is_a("IfcBuildingStorey"):
             location = get_object_location(obj, props)
             storeys.append((element, location))
 
     if not elements:
-        self.report({'WARNING'}, f"No elements selected or available for tagging, removed {remove_count} existing tags.")
+        self.report({'WARNING'}, f"No elements selected or available for numbering, removed {remove_count} existing numbers.")
         return {'CANCELLED'}
-    
+
     elements.sort(key=ft.cmp_to_key(lambda a, b: cmp_within_precision(a[2], b[2], props, use_dir=False)))
 
     elements.sort(key=ft.cmp_to_key(lambda a, b: cmp_within_precision(a[1], b[1], props)))
@@ -459,10 +474,8 @@ def assign_tags(self, context):
     storeys = [storey[0] for storey in storeys]  # Extract only the IfcBuildingStorey entities
 
     ifc_types = [t[0] for t in load_types(objects)[0]]
-    elements_by_type = [[element[0] for element in elements if element[0].is_a(ifc_type)] 
-                        for ifc_type in ifc_types]
+    elements_by_type = [[element for (element, _, _) in elements if element.is_a() == ifc_type] for ifc_type in ifc_types]
 
-    
     for (element_number, (element, _, _)) in enumerate(elements):
 
         type_index = ifc_types.index(element.is_a())
@@ -475,39 +488,41 @@ def assign_tags(self, context):
         elif "{L}" in props.format:
             self.report({'WARNING'}, f"Element {element.Name} with ID {element.GlobalId} is not contained in any storey.")
 
-        tag = format_tag(props, element_number, type_number, level_number, type_name=type_name, max_number=len(objects))
+        number = format_number(props, element_number, type_number, level_number, type_name=type_name, max_number=len(objects))
+        number_count += set_number(element, (number, number), ifc_file, (props.save_prop=="Tag", props.save_prop=="Pset"))
 
-        tag_count += set_tag(element, (tag, tag), ifc_file, (props.save_prop=="Tag", props.save_prop=="Pset"))
+    self.report({'INFO'}, f"Renumbered {number_count} objects, removed number from {remove_count} objects.")
 
-    self.report({'INFO'}, f"Assigned tag to {tag_count} objects")
-
-    #Check for duplicate tags
-    tags = []
-    pset_tags = []
-    for obj in bpy.context.scene.objects:
-        tag, pset_tag = get_tag(obj)
-        element = tool.Ifc.get_entity(obj)
-        if tag in tags or pset_tag in pset_tags:
-            self.report({'WARNING'}, f"The model contains duplicate tags")
-            break
-        if tag is not None:
-            tags.append(tag)
-        if pset_tag is not None:
-            pset_tags.append(pset_tag)
+    if props.check_duplicates_toggle:
+        #Check for duplicate numbers
+        tags = []
+        pset_numbers = []
+        for obj in bpy.context.scene.objects:
+            tag, pset_number = get_number(obj, (props.save_prop=="Tag", props.save_prop=="Pset"))
+            element = tool.Ifc.get_entity(obj)
+            if not element.is_a("IfcElement"):
+                continue
+            if tag in tags or pset_number in pset_numbers:
+                self.report({'WARNING'}, f"The model contains duplicate numbers")
+                break
+            if props.save_prop == "Tag" and tag is not None:
+                tags.append(tag)
+            if props.save_prop == "Pset" and pset_number is not None:
+                pset_numbers.append(pset_number)
 
     return {'FINISHED'}
 
-class IFC_AssignTag(bpy.types.Operator):
-    bl_idname = "ifc.assign_tag"
-    bl_label = "Assign tag"
-    bl_description = "Assign tag to selected objects"
+class IFC_AssignNumber(bpy.types.Operator):
+    bl_idname = "ifc.assign_number"
+    bl_label = "Assign numbers"
+    bl_description = "Assign numbers to selected objects"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         IfcStore.begin_transaction(self)
-        old_value = {obj.name: get_tag(obj) for obj in bpy.context.scene.objects if tool.Ifc.get_entity(obj).is_a("IfcElement")}
-        result = assign_tags(self, context)
-        new_value = {obj.name: get_tag(obj) for obj in bpy.context.scene.objects if tool.Ifc.get_entity(obj).is_a("IfcElement")}
+        old_value = {obj.name: get_number(obj) for obj in bpy.context.scene.objects}
+        result = assign_numbers(self, context)
+        new_value = {obj.name: get_number(obj) for obj in bpy.context.scene.objects}
         self.transaction_data = {"old_value": old_value, "new_value": new_value}
         IfcStore.add_transaction_operation(self)
         IfcStore.end_transaction(self)
@@ -516,20 +531,20 @@ class IFC_AssignTag(bpy.types.Operator):
     def rollback(self, data):
         rollback_count = 0
         for obj in bpy.context.scene.objects:
-            old_tag = data["old_value"][obj.name]
-            if old_tag != get_tag(obj):
-                set_tag(tool.Ifc.get_entity(obj), old_tag, IfcStore.get_file())
+            old_number = data["old_value"][obj.name]
+            if old_number != get_number(obj):
+                set_number(tool.Ifc.get_entity(obj), old_number, IfcStore.get_file())
                 rollback_count += 1
-        print(f"Rollback {rollback_count} tags.")
+        print(f"Rollback {rollback_count} numbers.")
 
     def commit(self, data):
         commit_count = 0
         for obj in bpy.context.scene.objects:
-            new_tag = data["new_value"][obj.name]
-            if new_tag != get_tag(obj):
-                set_tag(tool.Ifc.get_entity(obj), new_tag, IfcStore.get_file())
+            new_number = data["new_value"][obj.name]
+            if new_number != get_number(obj):
+                set_number(tool.Ifc.get_entity(obj), new_number, IfcStore.get_file())
                 commit_count += 1
-        print(f"Commit {commit_count} tags.")
+        print(f"Commit {commit_count} numbers.")
 
 
 # 3. UI Panel (where you see it)
@@ -542,22 +557,20 @@ class IFCNumberingTool(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        props = context.scene.ifc_tag_settings
+        props = context.scene.ifc_numbering_settings
         props.draw(layout)
 
 # 4. Registration
-classes = [IFC_AssignTag, IFC_TagSettings, IFCNumberingTool]
-
+classes = [IFC_AssignNumber, IFC_NumberingSettings, IFCNumberingTool]
 
 def register():   
     for cls in classes:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.ifc_tag_settings = bpy.props.PointerProperty(type=IFC_TagSettings)
-    
+    bpy.types.Scene.ifc_numbering_settings = bpy.props.PointerProperty(type=IFC_NumberingSettings)
 
 def unregister():
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
-    del bpy.types.Scene.ifc_tag_settings
+    del bpy.types.Scene.ifc_numbering_settings
 
 register()
