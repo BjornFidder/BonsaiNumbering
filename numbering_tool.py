@@ -16,6 +16,7 @@ def load_types(objects):
     """Load the available IFC types from the selected objects."""
     if not objects:
         return ifc_types, {"IfcElement": 0}
+        return [("IfcElement", "All", "element")], {"IfcElement": 0}
     
     ifc_types = [("IfcElement", "All", "element")]
     seen_types = []
