@@ -7,10 +7,13 @@ from bonsai.bim.ifc import IfcStore
 import string
 import ifcopenshell.api as ifc_api
 from ifcopenshell.util.element import get_pset
+import json
 
 import time
 
 pset_name = "Pset_Numbering"
+pset_settings_name = "Pset_NumberingSettings"
+ifc_file = IfcStore.get_file()
 
 def load_types(objects):
     """Load the available IFC types from the selected objects."""
@@ -47,6 +50,8 @@ def get_possible_types(self, context):
 
     props = context.scene.ifc_numbering_settings
     objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
+    if props.visible_toggle:
+        objects = [obj for obj in objects if obj.visible_get()]
     ifc_types, number_counts = load_types(objects)
     possible_types = [(id, name + f": {number_counts[id]}", "") for (id, name, _) in ifc_types]
     if possible_types != _possible_types:
@@ -111,6 +116,8 @@ def get_number_selected(props):
         return 0
     #Get the number of selected elements of the selected types
     objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
+    if props.visible_toggle:
+        objects = [obj for obj in objects if obj.visible_get()]
     _, type_counts = load_types(objects)
     if "IfcElement" in props.selected_types:
         return type_counts.get("IfcElement", 0) 
@@ -180,10 +187,16 @@ def update_format_preview(self, context):
 # Settings (user input fields)
 class IFC_NumberingSettings(bpy.types.PropertyGroup):
 
-    
     selected_toggle: bpy.props.BoolProperty(
         name="Selected only",
         description="Only number selected objects",
+        default=False,
+        update=update_format_preview
+    ) # pyright: ignore[reportInvalidTypeForm]
+
+    visible_toggle: bpy.props.BoolProperty(
+        name="Visible only",
+        description="Only number visible objects",
         default=False,
         update=update_format_preview
     ) # pyright: ignore[reportInvalidTypeForm]
@@ -380,10 +393,17 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
 
     # Draw method (UI layout)
     def draw(self, layout):
+        
+        row = layout.row(align=False)
+        row.operator("ifc.save_settings", icon="FILE_TICK", text="Save settings")
+        row.operator("ifc.load_settings", icon="FILE_REFRESH", text="Load settings")
+        row.operator("ifc.export_settings", icon="EXPORT", text="Export settings")
+        row.operator("ifc.import_settings", icon="IMPORT", text="Import settings")
 
         row = layout.row(align=False)
         row.label(text= "Elements to number:")
         row.prop(self, "selected_toggle")
+        row.prop(self, "visible_toggle")
 
         rows = layout.grid_flow(row_major=True, align=True, columns=4)
         rows.prop(self, "selected_types", expand=True)
@@ -426,6 +446,7 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         layout.prop(self, "remove_toggle")
         layout.prop(self, "check_duplicates_toggle")
         layout.operator("ifc.assign_number", icon="TAG", text="Assign numbers")
+        
 
 # 2. Operator (button logic)
 
@@ -481,7 +502,7 @@ def get_number(element, save_prop=(True, True)):
         prop = pset.get("Number")
     return (tag, prop)
 
-def set_number(element, number, ifc_file, save_prop=(True, True)):
+def set_number(element, number, save_prop=(True, True)):
     count = 0
     if save_prop[0] and hasattr(element, "Tag"):
         count += element.Tag != number[0]
@@ -499,28 +520,27 @@ def set_number(element, number, ifc_file, save_prop=(True, True)):
             ifc_api.run("pset.edit_pset", ifc_file, pset=pset, properties={"Number": number[1]})
     return count
 
-def remove_number(element, ifc_file, save_prop):
-    return set_number(element, (None, None), ifc_file, (save_prop=="Tag", save_prop=="Pset"))
-
+def remove_number(element, save_prop):
+    return set_number(element, (None, None), (save_prop=="Tag", save_prop=="Pset"))
     
-def assign_numbers(self, context):
+def assign_numbers(self, props):
     """Assign numbers to selected objects based on their IFC type and location."""
-
-    ifc_file = IfcStore.get_file()
-    
-    props = context.scene.ifc_numbering_settings
     number_count = 0
     remove_count = 0
     if props.remove_toggle:
         #Remove existing numbers
         for obj in bpy.context.scene.objects:
-            if props.selected_toggle and obj not in bpy.context.selected_objects:
+            if (props.selected_toggle and obj not in bpy.context.selected_objects) or \
+               (props.visible_toggle and not obj.visible_get()):
                 element = tool.Ifc.get_entity(obj)
                 if element is not None and element.is_a("IfcElement"):
-                    remove_count += remove_number(element, ifc_file, props.save_prop)
+                    remove_count += remove_number(element, props.save_prop)
 
     objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
     
+    if props.visible_toggle:
+        objects = [obj for obj in objects if obj.visible_get()]
+
     if not objects:
         self.report({'WARNING'}, f"No objects selected or available for numbering, removed {remove_count} existing numbers.")
         return {'CANCELLED'}
@@ -540,7 +560,7 @@ def assign_numbers(self, context):
             dimensions = get_object_dimensions(obj)
             elements.append((element, location, dimensions))
         elif props.remove_toggle and element.is_a() in possible_types:
-            remove_count += remove_number(element, ifc_file, props.save_prop)
+            remove_count += remove_number(element, props.save_prop)
 
     if not elements:
         self.report({'WARNING'}, f"No elements selected or available for numbering, removed {remove_count} existing numbers.")
@@ -573,7 +593,7 @@ def assign_numbers(self, context):
             self.report({'WARNING'}, f"Element {element.Name} with ID {element.GlobalId} is not contained in any storey.")
 
         number = format_number(props, element_number, type_number, storey_number, type_name, len(objects), len(storeys))
-        number_count += set_number(element, (number, number), ifc_file, (props.save_prop=="Tag", props.save_prop=="Pset"))
+        number_count += set_number(element, (number, number), (props.save_prop=="Tag", props.save_prop=="Pset"))
 
     self.report({'INFO'}, f"Renumbered {number_count} objects, removed number from {remove_count} objects.")
 
@@ -605,7 +625,8 @@ class IFC_AssignNumber(bpy.types.Operator):
     def execute(self, context):
         IfcStore.begin_transaction(self)
         old_value = {obj.name: get_number(tool.Ifc.get_entity(obj)) for obj in bpy.context.scene.objects}
-        result = assign_numbers(self, context)
+        props = context.scene.ifc_numbering_settings
+        result = assign_numbers(self, props)
         new_value = {obj.name: get_number(tool.Ifc.get_entity(obj)) for obj in bpy.context.scene.objects}
         self.transaction_data = {"old_value": old_value, "new_value": new_value}
         IfcStore.add_transaction_operation(self)
@@ -632,8 +653,117 @@ class IFC_AssignNumber(bpy.types.Operator):
                 commit_count += 1
         print(f"Commit {commit_count} numbers.")
 
+#Numbering tool settings saving and loading
+project = ifc_file.by_type("IfcProject")[0]
 
-# 3. UI Panel (where you see it)
+settings_dict = lambda props: {
+    "selected_toggle": props.selected_toggle,
+    "visible_toggle": props.visible_toggle,
+    "x_direction": props.x_direction,
+    "y_direction": props.y_direction,
+    "z_direction": props.z_direction,
+    "axis_order": props.axis_order,
+    "location_type": props.location_type,
+    "precision": str((props.precision[0], props.precision[1], props.precision[2])),
+    "initial_element_number": props.initial_element_number,
+    "initial_type_number": props.initial_type_number,
+    "initial_storey_number": props.initial_storey_number,
+    "element_numbering": props.element_numbering,
+    "type_numbering": props.type_numbering,
+    "storey_numbering": props.storey_numbering,
+    "format": props.format,
+    "save_prop": props.save_prop,
+    "remove_toggle": str(props.remove_toggle),
+    "check_duplicates_toggle": str(props.check_duplicates_toggle),
+}
+
+def save_settings(self, props):
+    """Save the numbering settings to the IFC file."""
+    if pset_settings := get_pset(project, pset_settings_name):
+        pset_settings = ifc_file.by_id(pset_settings["id"])
+    else:
+        pset_settings = ifc_api.run("pset.add_pset", ifc_file, product=project, name=pset_settings_name)
+    if not pset_settings:
+        self.report({'ERROR'}, "Could not create property set")
+        return {'CANCELLED'}
+    ifc_api.run("pset.edit_pset", ifc_file, pset=pset_settings, properties={"Settings": json.dumps(settings_dict(props))})
+    self.report({'INFO'}, "Saved settings to IFCProject element")
+    return {'FINISHED'}
+
+def read_settings(settings, props):
+    for key, value in settings.items():
+        if key == "precision":
+            value = tuple(map(int, value.strip("()").split(",")))
+        if value == "True" or value == "False":
+            value = (value=="True")
+        setattr(props, key, value)
+
+def load_settings(self, props):
+    if pset_settings := get_pset(project, pset_settings_name):
+        settings = json.loads(pset_settings.get("Settings", "{}"))
+        read_settings(settings, props)
+        self.report({'INFO'}, "Loaded settings from IFCProject element")
+        return {'FINISHED'}
+    else:
+        self.report({'WARNING'}, "No settings found")
+        return {'CANCELLED'}
+
+class IFC_SaveSettings(bpy.types.Operator):
+    bl_idname = "ifc.save_settings"
+    bl_label = "Save Settings"
+    bl_description = f"Save the current numbering settings to the {pset_settings_name} property of the IFC Project element "
+
+    def execute(self, context):
+        props = context.scene.ifc_numbering_settings
+        return save_settings(self, props)
+    
+class IFC_LoadSettings(bpy.types.Operator):
+    bl_idname = "ifc.load_settings"
+    bl_label = "Load Settings"
+    bl_description = f"Load the saved numbering settings from the {pset_settings_name} property of the IFC Project element"
+
+    def execute(self, context):
+        props = context.scene.ifc_numbering_settings
+        return load_settings(self, props)
+
+class IFC_ExportSettings(bpy.types.Operator):
+    bl_idname = "ifc.export_settings"
+    bl_label = "Export Settings"
+    bl_description = f"Export the current numbering settings to a JSON file"
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH") # pyright: ignore[reportInvalidTypeForm]
+
+    def execute(self, context):
+        props = context.scene.ifc_numbering_settings
+        with open(self.filepath, 'w') as f:
+            json.dump(settings_dict(props), f)
+        self.report({'INFO'}, f"Exported settings to {self.filepath}")
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        self.filepath = "settings.json"
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+    
+class IFC_ImportSettings(bpy.types.Operator):
+    bl_idname = "ifc.import_settings"
+    bl_label = "Import Settings"
+    bl_description = f"Import numbering settings from a JSON file"
+
+    filepath: bpy.props.StringProperty(subtype="FILE_PATH") # pyright: ignore[reportInvalidTypeForm]
+
+    def execute(self, context):
+        props = context.scene.ifc_numbering_settings
+        with open(self.filepath, 'r') as f:
+            settings = json.load(f)
+            read_settings(settings, props)
+        self.report({'INFO'}, f"Imported settings from {self.filepath}")
+        return {'FINISHED'}
+    
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+# UI Panel (where you see it)
 class IFCNumberingTool(bpy.types.Panel):
     bl_label = "Number Assignment Tool"
     bl_idname = "VIEW3D_PT_bonsai_ifc_numbering_tool"
@@ -646,8 +776,8 @@ class IFCNumberingTool(bpy.types.Panel):
         props = context.scene.ifc_numbering_settings
         props.draw(layout)
 
-# 4. Registration
-classes = [IFC_AssignNumber, IFC_NumberingSettings, IFCNumberingTool]
+# Registration
+classes = [IFC_AssignNumber, IFC_SaveSettings, IFC_LoadSettings, IFC_ExportSettings, IFC_ImportSettings, IFC_NumberingSettings, IFCNumberingTool]
 
 def register():   
     for cls in classes:
