@@ -75,7 +75,6 @@ def format_number(props, element_number=0, type_number=0, level_number=None, typ
 
 def get_type_name(props):
     """Return type name used in preview, based on selected types"""
-    global _possible_types
     if not props.selected_types:
         #If no types selected, return "Type"
         return "Type"
@@ -91,6 +90,20 @@ def get_type_name(props):
         return str(_possible_types[1][0][3:])
     #If none selected, return "Type"
     return "Type"
+
+
+def get_number_selected(props):
+    """Return number of selected elements used in preview, based on selected types"""
+    if not props.selected_types:
+        #If no types selected, return 0
+        return 0
+    #Get the number of selected elements of the selected types
+    objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
+    _, type_counts = load_types(objects)
+    if "IfcElement" in props.selected_types:
+        return type_counts.get("IfcElement", 0) 
+    else:
+        return sum(type_counts.get(t, 0) for t in props.selected_types)
 
 def to_number(i):
     """Convert a number to a string."""
@@ -335,7 +348,7 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
    
         row = layout.row(align=False)
         row.prop(self, "format")
-        row.label(text="Preview: " + format_number(self, 0, 0, 0, get_type_name(self), len(bpy.context.selected_objects if self.selected_toggle else bpy.context.scene.objects)))
+        row.label(text="Preview: " + format_number(self, 0, 0, 0, get_type_name(self), get_number_selected(self)))
     
         layout.prop(self, "save_prop")
         layout.prop(self, "remove_toggle")
