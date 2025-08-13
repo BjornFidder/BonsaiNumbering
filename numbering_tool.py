@@ -104,6 +104,8 @@ def get_type_name(props):
 
 def get_number_selected(props):
     """Return number of selected elements used in preview, based on selected types"""
+    if not (props.element_numbering == 'number_ext' or props.type_numbering == 'number_ext'):
+        return 0
     if not props.selected_types:
         #If no types selected, return 0
         return 0
@@ -172,19 +174,26 @@ def get_numbering_preview(numbering_type, initial):
     numbers = [to_numbering_string(i, numbering_type, 10) for i in range(initial, initial + 3)]
     return "{0}, {1}, {2}, ...".format(*numbers)
 
+def update_format_preview(self, context):
+    self["_format_preview"] = format_number(self, 0, 0, 0, get_type_name(self), get_number_selected(self), len(get_storeys(self)))
+
 # Settings (user input fields)
 class IFC_NumberingSettings(bpy.types.PropertyGroup):
+
+    
     selected_toggle: bpy.props.BoolProperty(
         name="Selected only",
         description="Only number selected objects",
-        default=False
+        default=False,
+        update=update_format_preview
     ) # pyright: ignore[reportInvalidTypeForm]
 
     selected_types: bpy.props.EnumProperty(
         name="Of type",
         description="Select which types of elements to number",
         items= get_possible_types,
-        options={'ENUM_FLAG'}
+        options={'ENUM_FLAG'},
+        update=update_format_preview
     ) # pyright: ignore[reportInvalidTypeForm]
 
     x_direction: bpy.props.EnumProperty(
@@ -252,19 +261,22 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
     initial_element_number: bpy.props.IntProperty(
         name="{E}",
         description="Initial number for numbering elements",
-        default=1
+        default=1,
+        update=update_format_preview
     ) # pyright: ignore[reportInvalidTypeForm]
 
     initial_type_number: bpy.props.IntProperty(
         name="{T}",
         description="Initial number for numbering elements within type",
-        default=1
+        default=1,
+        update=update_format_preview
     ) # pyright: ignore[reportInvalidTypeForm]
 
     initial_storey_number: bpy.props.IntProperty(
         name="{S}",
         description="Initial number for numbering storeys",
-        default=0
+        default=0,
+        update=update_format_preview
     ) # pyright: ignore[reportInvalidTypeForm]
 
     numberings_enum = lambda self, initial : [
@@ -279,18 +291,21 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
     element_numbering: bpy.props.EnumProperty(
         name="{E}",
         description="Select numbering system for element numbering",
-        items=lambda self, context: self.numberings_enum(self.initial_element_number)
+        items=lambda self, context: self.numberings_enum(self.initial_element_number),
+        update=update_format_preview
     )    # pyright: ignore[reportInvalidTypeForm]
 
     type_numbering: bpy.props.EnumProperty(
         name="{T}",
         description="Select numbering system for numbering within types",
-        items=lambda self, context: self.numberings_enum(self.initial_type_number)
+        items=lambda self, context: self.numberings_enum(self.initial_type_number),
+        update=update_format_preview
     )    # pyright: ignore[reportInvalidTypeForm]
 
     def update_storey_numbering(self, context):
         if self.storey_numbering == "custom":
             self.initial_storey_number = 0
+        update_format_preview(self, context)
     
     storey_numbering: bpy.props.EnumProperty(
         name="{S}",
@@ -319,7 +334,7 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
     custom_storey: bpy.props.EnumProperty(
         name = "Storey",
         description = "Select storey to number",
-        items = lambda self, _: [(storey.Name, storey.Name, f"{storey.Name} ({storey.GlobalId})") for storey in get_storeys(self)],
+        items = lambda self, _: [(storey.Name, storey.Name, f"{storey.Name}\nID: {storey.GlobalId}") for storey in get_storeys(self)],
         update = update_custom_storey
     ) # pyright: ignore[reportInvalidTypeForm]
 
@@ -339,7 +354,8 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         "[T]: first letter of type name\n" \
         "[TT] : all capitalized letters in type name\n" \
         "[TF]: full type name",
-        default="E{E}S{S}[T]{T}"
+        default="E{E}S{S}[T]{T}",
+        update=update_format_preview
     ) # pyright: ignore[reportInvalidTypeForm]
 
     save_prop : bpy.props.EnumProperty(
@@ -405,8 +421,7 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
 
         row = layout.row(align=False)
         row.prop(self, "format")
-        row.label(text="Preview: " + format_number(self, 0, 0, 0, get_type_name(self), get_number_selected(self), len(get_storeys(self))))
-
+        row.label(text="Preview: " + self.get("_format_preview", ""))
         layout.prop(self, "save_prop")
         layout.prop(self, "remove_toggle")
         layout.prop(self, "check_duplicates_toggle")
