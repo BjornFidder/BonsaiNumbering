@@ -43,11 +43,9 @@ def load_types(objects):
     return ifc_types, number_counts
 
 _possible_types = []
-
 def get_possible_types(self, context):
     """Return the list of available types for selection."""
     global _possible_types
-
     props = context.scene.ifc_numbering_settings
     objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
     if props.visible_toggle:
@@ -65,29 +63,29 @@ def get_storeys(props):
         if element is not None and element.is_a("IfcBuildingStorey"):
             location = get_object_location(obj, props)
             storeys.append((element, location))
-    storeys.sort(key=ft.cmp_to_key(lambda a, b: cmp_within_precision(a[1], b[1], props)))
+    storeys.sort(key=ft.cmp_to_key(lambda a, b: cmp_within_precision(a[1], b[1], props, use_dir=False)))
     storeys = [storey[0] for storey in storeys]  # Extract only the IfcBuildingStorey entities
     return storeys
 
-def format_number(props, element_number=0, type_number=0, storey_number=None, type_name="", max_number=100, max_storey=1):
+def format_number(props, number_values = (0, 0, None), max_number_values=(100, 100, 1), type_name=""):
     """Return the formatted number for the given element, type and storey number"""
-    tag = props.format
-    if "{E}" in tag:
-        tag = tag.replace("{E}", to_numbering_string(props.initial_element_number + element_number, props.element_numbering, max_number))
-    if "{T}" in tag:
-        tag = tag.replace("{T}", to_numbering_string(props.initial_type_number + type_number, props.type_numbering, max_number))
-    if "{S}" in tag:
-        if storey_number is not None:
-            tag = tag.replace("{S}", to_numbering_string(props.initial_storey_number + storey_number, props.storey_numbering, max_storey))
+    format = props.format
+    if "{E}" in format:
+        format = format.replace("{E}", to_numbering_string(props.initial_element_number + number_values[0], props.element_numbering, max_number_values[0]))
+    if "{T}" in format:
+        format = format.replace("{T}", to_numbering_string(props.initial_type_number + number_values[1], props.type_numbering, max_number_values[1]))
+    if "{S}" in format:
+        if number_values[2] is not None:
+            format = format.replace("{S}", to_numbering_string(props.initial_storey_number + number_values[2], props.storey_numbering, max_number_values[2]))
         else:
-            tag = tag.replace("{S}", "x")
-    if "[T]" in tag and len(type_name) > 0:
-        tag = tag.replace("[T]", type_name[0])
-    if "[TT]" in tag and len(type_name) > 1:
-        tag = tag.replace("[TT]", "".join([c for c in type_name if c.isupper()]))
-    if "[TF]" in tag:
-        tag = tag.replace("[TF]", type_name)
-    return tag
+            format = format.replace("{S}", "x")
+    if "[T]" in format and len(type_name) > 0:
+        format = format.replace("[T]", type_name[0])
+    if "[TT]" in format and len(type_name) > 1:
+        format = format.replace("[TT]", "".join([c for c in type_name if c.isupper()]))
+    if "[TF]" in format:
+        format = format.replace("[TF]", type_name)
+    return format
 
 def get_type_name(props):
     """Return type name used in preview, based on selected types"""
@@ -102,27 +100,29 @@ def get_type_name(props):
         return str(list(types)[0][3:])
     #If all selected, return type name of one of the selected types
     all_types = _possible_types
-    if len(_possible_types) > 1:
-        return str(_possible_types[1][0][3:])
+    if len(all_types) > 1:
+        return str(all_types[1][0][3:])
     #If none selected, return "Type"
     return "Type"
 
-def get_number_selected(props):
+def get_max_numbers(props, type_name):
     """Return number of selected elements used in preview, based on selected types"""
-    if not (props.element_numbering == 'number_ext' or props.type_numbering == 'number_ext'):
-        return 0
-    if not props.selected_types:
-        #If no types selected, return 0
-        return 0
-    #Get the number of selected elements of the selected types
-    objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
-    if props.visible_toggle:
-        objects = [obj for obj in objects if obj.visible_get()]
-    _, type_counts = load_types(objects)
-    if "IfcElement" in props.selected_types:
-        return type_counts.get("IfcElement", 0) 
-    else:
-        return sum(type_counts.get(t, 0) for t in props.selected_types)
+    max_element, max_type, max_storey = 0, 0, 0
+    if props.storey_numbering == 'number_ext':
+        max_storey = len(get_storeys(props))
+    if props.element_numbering == 'number_ext' or props.type_numbering == 'number_ext':
+        if not props.selected_types:
+            return max_element, max_type, max_storey
+        objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
+        if props.visible_toggle:
+            objects = [obj for obj in objects if obj.visible_get()]
+        _, type_counts = load_types(objects)
+        if "IfcElement" in props.selected_types:
+            max_element = type_counts.get("IfcElement", 0) 
+        else:
+            max_element = sum(type_counts.get(t, 0) for t in props.selected_types)
+        max_type = type_counts.get('Ifc' + type_name, max_element)
+    return max_element, max_type, max_storey
 
 def to_number(i):
     """Convert a number to a string."""
@@ -182,7 +182,8 @@ def get_numbering_preview(numbering_type, initial):
     return "{0}, {1}, {2}, ...".format(*numbers)
 
 def update_format_preview(self, context):
-    self["_format_preview"] = format_number(self, 0, 0, 0, get_type_name(self), get_number_selected(self), len(get_storeys(self)))
+    type_name = get_type_name(self)
+    self["_format_preview"] = format_number(self, (0, 0, 0), get_max_numbers(self, type_name), type_name)
 
 # Settings (user input fields)
 class IFC_NumberingSettings(bpy.types.PropertyGroup):
@@ -333,15 +334,15 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         storey = next((storey for storey in storeys if storey.Name == self.custom_storey), None)
         _, number = get_number(storey, (False, True))
         if number is None:
-            number = storeys.index(storey)
-        self["_custom_storey_number"] = int(number)
+            number = str(storeys.index(storey))
+        self["_custom_storey_number"] = number
 
     def get_custom_storey_number(self):
-        return self.get("_custom_storey_number", 0)
+        return self.get("_custom_storey_number", "0")
 
     def set_custom_storey_number(self, value):
         storey = next((storey for storey in get_storeys(self) if storey.Name == self.custom_storey), None)
-        set_number(storey, (None, str(value)), IfcStore.get_file(), (False, True))
+        set_number(storey, (None, value), (False, True))
         self["_custom_storey_number"] = value
 
     custom_storey: bpy.props.EnumProperty(
@@ -351,7 +352,7 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         update = update_custom_storey
     ) # pyright: ignore[reportInvalidTypeForm]
 
-    custom_storey_number: bpy.props.IntProperty(
+    custom_storey_number: bpy.props.StringProperty(
         name = "Storey number",
         description = f"Set custom storey number for selected storey, stored in the {pset_name} property set of the IFC element",
         get = get_custom_storey_number,
@@ -393,7 +394,6 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
 
     # Draw method (UI layout)
     def draw(self, layout):
-        
         row = layout.row(align=False)
         row.operator("ifc.save_settings", icon="FILE_TICK", text="Save settings")
         row.operator("ifc.load_settings", icon="FILE_REFRESH", text="Load settings")
@@ -413,9 +413,14 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         row.prop(self, "x_direction", text="X")
         row.prop(self, "y_direction", text="Y")
         row.prop(self, "z_direction", text="Z")
-        layout.prop(self, "axis_order")
+
+        row = layout.row(align=False)
+        row.label(text="Axis order:")
+        row.prop(self, "axis_order", text="")
         
-        layout.prop(self, "location_type")
+        row = layout.row(align=False)
+        row.label(text="Reference location:")
+        row.prop(self, "location_type", text="")
 
         layout.label(text="Precision in mm:")
         row = layout.row(align=False)
@@ -436,18 +441,23 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
 
         if self.storey_numbering == "custom":
             row = layout.row(align=False)
-            row.prop(self, "custom_storey")
-            row.prop(self, "custom_storey_number")
+            row.alignment = "RIGHT"
+            row.label(text="Storey:")
+            row.prop(self, "custom_storey", text="")
+            row.label(text="Storey number:")
+            row.prop(self, "custom_storey_number", text="")
 
         row = layout.row(align=False)
         row.prop(self, "format")
         row.label(text="Preview: " + self.get("_format_preview", ""))
-        layout.prop(self, "save_prop")
+
+        row = layout.row(align=False)
+        row.label(text="Store number in:")
+        row.prop(self, "save_prop", text="")
         layout.prop(self, "remove_toggle")
         layout.prop(self, "check_duplicates_toggle")
         layout.operator("ifc.assign_number", icon="TAG", text="Assign numbers")
         
-
 # 2. Operator (button logic)
 
 def get_object_location(obj, props):
@@ -549,7 +559,7 @@ def assign_numbers(self, props):
     possible_types = [tupl[0] for tupl in _possible_types]
     if "IfcElement" in selected_types:
         selected_types = possible_types
-
+    
     elements = []
     for obj in objects: 
         element = tool.Ifc.get_entity(obj)
@@ -578,7 +588,8 @@ def assign_numbers(self, props):
     for (element_number, (element, _, _)) in enumerate(elements):
 
         type_index = ifc_types.index(element.is_a())
-        type_number = elements_by_type[type_index].index(element)
+        type_elements = elements_by_type[type_index]
+        type_number = type_elements.index(element)
         type_name = ifc_types[type_index][3:]
 
         if structure := element.ContainedInStructure:
@@ -592,7 +603,7 @@ def assign_numbers(self, props):
         elif "{S}" in props.format:
             self.report({'WARNING'}, f"Element {element.Name} with ID {element.GlobalId} is not contained in any storey.")
 
-        number = format_number(props, element_number, type_number, storey_number, type_name, len(objects), len(storeys))
+        number = format_number(props, (element_number, type_number, storey_number), (len(objects), len(type_elements), len(storeys)), type_name)
         number_count += set_number(element, (number, number), (props.save_prop=="Tag", props.save_prop=="Pset"))
 
     self.report({'INFO'}, f"Renumbered {number_count} objects, removed number from {remove_count} objects.")
@@ -636,28 +647,40 @@ class IFC_AssignNumber(bpy.types.Operator):
     def rollback(self, data):
         rollback_count = 0
         for obj in bpy.context.scene.objects:
-            old_number = data["old_value"][obj.name]
+            old_number = data["old_value"].get(obj.name, (None, None))
             element = tool.Ifc.get_entity(obj)
-            if old_number != get_number(element):
-                set_number(element, old_number, IfcStore.get_file())
+            if element and old_number != get_number(element):
+                set_number(element, old_number)
                 rollback_count += 1
-        print(f"Rollback {rollback_count} numbers.")
-
+        bpy.ops.ifc.show_message('EXEC_DEFAULT', message=f"Rollback {rollback_count} numbers.")
+        return {'FINISHED'}
+    
     def commit(self, data):
         commit_count = 0
         for obj in bpy.context.scene.objects:
-            new_number = data["new_value"][obj.name]
+            new_number = data["new_value"].get(obj.name, (None, None))
             element = tool.Ifc.get_entity(obj)
-            if new_number != get_number(element):
-                set_number(element, new_number, IfcStore.get_file())
+            if element and new_number != get_number(element):
+                set_number(element, new_number)
                 commit_count += 1
-        print(f"Commit {commit_count} numbers.")
+        bpy.ops.ifc.show_message('EXEC_DEFAULT', message=f"Commit {commit_count} numbers.")
 
+class IFC_ShowMessage(bpy.types.Operator):
+    bl_idname = "ifc.show_message"
+    bl_label = "Show Message"
+    bl_description = "Show a message in the info area"
+    message: bpy.props.StringProperty() # pyright: ignore[reportInvalidTypeForm]
+
+    def execute(self, context):
+        self.report({'INFO'}, self.message)
+        return {'FINISHED'}
+    
 #Numbering tool settings saving and loading
 project = ifc_file.by_type("IfcProject")[0]
 
 settings_dict = lambda props: {
     "selected_toggle": props.selected_toggle,
+    "selected_types": list(props.selected_types),
     "visible_toggle": props.visible_toggle,
     "x_direction": props.x_direction,
     "y_direction": props.y_direction,
@@ -692,6 +715,9 @@ def save_settings(self, props):
 
 def read_settings(settings, props):
     for key, value in settings.items():
+        if key == "selected_types":
+            possible_type_names = [t[0] for t in _possible_types]
+            value = set([type_name for type_name in value if type_name in possible_type_names])
         if key == "precision":
             value = tuple(map(int, value.strip("()").split(",")))
         if value == "True" or value == "False":
@@ -777,7 +803,7 @@ class IFCNumberingTool(bpy.types.Panel):
         props.draw(layout)
 
 # Registration
-classes = [IFC_AssignNumber, IFC_SaveSettings, IFC_LoadSettings, IFC_ExportSettings, IFC_ImportSettings, IFC_NumberingSettings, IFCNumberingTool]
+classes = [IFC_AssignNumber, IFC_SaveSettings, IFC_LoadSettings, IFC_ExportSettings, IFC_ImportSettings, IFC_ShowMessage, IFC_NumberingSettings, IFCNumberingTool]
 
 def register():   
     for cls in classes:
