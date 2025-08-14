@@ -266,7 +266,7 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
 
     precision: bpy.props.IntVectorProperty(
         name="Precision",
-        description="Precision for tagging elements",
+        description="Precision for sorting elements in X, Y and Z direction",
         default=(1, 1, 1),
         min=1,
         size=3
@@ -394,69 +394,92 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
 
     # Draw method (UI layout)
     def draw(self, layout):
-        row = layout.row(align=False)
-        row.operator("ifc.save_settings", icon="FILE_TICK", text="Save settings")
-        row.operator("ifc.load_settings", icon="FILE_REFRESH", text="Load settings")
-        row.operator("ifc.export_settings", icon="EXPORT", text="Export settings")
-        row.operator("ifc.import_settings", icon="IMPORT", text="Import settings")
 
-        row = layout.row(align=False)
-        row.label(text= "Elements to number:")
+        # Settings box
+        box = layout.box()
+        box.label(text="Settings")
+        row = box.row(align=False)
+        row.operator("ifc.save_settings", icon="FILE_TICK", text="Save")
+        row.operator("ifc.load_settings", icon="FILE_REFRESH", text="Load")
+        row.operator("ifc.export_settings", icon="EXPORT", text="Export")
+        row.operator("ifc.import_settings", icon="IMPORT", text="Import")
+
+        # Selection box
+        box = layout.box()
+        box.label(text="Elements to number:")
+        row = box.row(align=False)
+        row.alignment = "LEFT"
         row.prop(self, "selected_toggle")
         row.prop(self, "visible_toggle")
 
-        rows = layout.grid_flow(row_major=True, align=True, columns=4)
+        rows = box.grid_flow(row_major=True, align=True, columns=4)
         rows.prop(self, "selected_types", expand=True)
 
-        layout.label(text="Axis direction:")
-        row = layout.row(align=False)
-        row.prop(self, "x_direction", text="X")
-        row.prop(self, "y_direction", text="Y")
-        row.prop(self, "z_direction", text="Z")
+        # Numbering order box
+        box = layout.box()
+        box.label(text="Numbering order")
+        # Create a grid for direction and precision
+        grid = box.grid_flow(row_major=True, align=False, columns=4, even_columns=True)
+        grid.label(text="Direction: ")
+        grid.prop(self, "x_direction", text="X")
+        grid.prop(self, "y_direction", text="Y")
+        grid.prop(self, "z_direction", text="Z")
+        grid.label(text="Precision: ")
+        grid.prop(self, "precision", index=0, text="X")
+        grid.prop(self, "precision", index=1, text="Y")
+        grid.prop(self, "precision", index=2, text="Z")
 
-        row = layout.row(align=False)
-        row.label(text="Axis order:")
-        row.prop(self, "axis_order", text="")
-        
-        row = layout.row(align=False)
-        row.label(text="Reference location:")
-        row.prop(self, "location_type", text="")
+        # Axis order and reference point 
+        grid = box.grid_flow(row_major=True, align=True, columns=4)
+        grid.label(text="Order:")
+        grid.prop(self, "axis_order", text="")
+        grid.label(text="Reference point:")
+        grid.prop(self, "location_type", text="")
 
-        layout.label(text="Precision in mm:")
-        row = layout.row(align=False)
-        row.prop(self, "precision", index=0, text="X")
-        row.prop(self, "precision", index=1, text="Y")
-        row.prop(self, "precision", index=2, text="Z")
+        # Numbering systems box
+        box = layout.box()
+        box.label(text="Numbering of elements {E}, within type {T} and storeys {S}")
+        grid = box.grid_flow(row_major=True, align=False, columns=4, even_columns=True)
+        grid.label(text="Start at:")
+        grid.prop(self, "initial_element_number", text="{E}")
+        grid.prop(self, "initial_type_number", text="{T}")
+        grid.prop(self, "initial_storey_number", text="{S}")
+        grid.label(text="System:")
+        grid.prop(self, "element_numbering", text="{E}")
+        grid.prop(self, "type_numbering", text="{T}")
+        grid.prop(self, "storey_numbering", text="{S}")
 
-        layout.label(text="Initial values for element {E}, within type {T} and storey {S}")
-        row = layout.row(align=False)
-        row.prop(self, "initial_element_number", text="{E}")
-        row.prop(self, "initial_type_number", text="{T}")
-        row.prop(self, "initial_storey_number", text="{S}")
-
-        row = layout.row(align=False)
-        row.prop(self, "element_numbering", text="{E}")
-        row.prop(self, "type_numbering", text="{T}")
-        row.prop(self, "storey_numbering", text="{S}")
-
+        # Custom storey number
         if self.storey_numbering == "custom":
-            row = layout.row(align=False)
-            row.alignment = "RIGHT"
-            row.label(text="Storey:")
-            row.prop(self, "custom_storey", text="")
-            row.label(text="Storey number:")
-            row.prop(self, "custom_storey_number", text="")
+            box = box.box()
+            row = box.row(align=False)
+            row.prop(self, "custom_storey", text="Storey")
+            row.prop(self, "custom_storey_number", text="Number")
 
-        row = layout.row(align=False)
-        row.prop(self, "format")
-        row.label(text="Preview: " + self.get("_format_preview", ""))
+        # Numbering format box
+        box = layout.box()
+        box.label(text="Numbering format")
 
-        row = layout.row(align=False)
-        row.label(text="Store number in:")
-        row.prop(self, "save_prop", text="")
-        layout.prop(self, "remove_toggle")
-        layout.prop(self, "check_duplicates_toggle")
-        layout.operator("ifc.assign_number", icon="TAG", text="Assign numbers")
+        grid = box.grid_flow(align=False, columns=4, even_columns=True)
+        grid.label(text="Format:")
+        grid.prop(self, "format", text="")
+        # Show preview in a textbox style (non-editable)
+        grid.label(text="Preview:")
+        preview_box = grid.box()
+        preview_box.label(text=self.get("_format_preview", ""))
+
+        # Storage options
+        box = layout.box()
+        box.label(text="Assignment options")
+        row = box.row(align=True)
+        row.prop(self, "save_prop", text="Store number in")
+        box.prop(self, "remove_toggle")
+        box.prop(self, "check_duplicates_toggle")
+
+        # Actions
+        layout.separator()
+        row = layout.row(align=True)
+        row.operator("ifc.assign_number", icon="TAG", text="Assign numbers")
         
 # 2. Operator (button logic)
 
@@ -713,7 +736,7 @@ def save_settings(self, props):
     self.report({'INFO'}, "Saved settings to IFCProject element")
     return {'FINISHED'}
 
-def read_settings(settings, props):
+def read_settings(self, settings, props):
     for key, value in settings.items():
         if key == "selected_types":
             possible_type_names = [t[0] for t in _possible_types]
@@ -722,12 +745,15 @@ def read_settings(settings, props):
             value = tuple(map(int, value.strip("()").split(",")))
         if value == "True" or value == "False":
             value = (value=="True")
-        setattr(props, key, value)
+        try:
+            setattr(props, key, value)
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to set property '{key}': {e}")
 
 def load_settings(self, props):
     if pset_settings := get_pset(project, pset_settings_name):
         settings = json.loads(pset_settings.get("Settings", "{}"))
-        read_settings(settings, props)
+        read_settings(self, settings, props)
         self.report({'INFO'}, "Loaded settings from IFCProject element")
         return {'FINISHED'}
     else:
@@ -781,7 +807,7 @@ class IFC_ImportSettings(bpy.types.Operator):
         props = context.scene.ifc_numbering_settings
         with open(self.filepath, 'r') as f:
             settings = json.load(f)
-            read_settings(settings, props)
+            read_settings(self, settings, props)
         self.report({'INFO'}, f"Imported settings from {self.filepath}")
         return {'FINISHED'}
     
