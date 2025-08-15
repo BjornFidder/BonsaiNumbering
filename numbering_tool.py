@@ -350,7 +350,7 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
     def update_custom_storey(self, context):
         storeys = get_storeys(self)
         storey = next((storey for storey in storeys if storey.Name == self.custom_storey), None)
-        _, number = get_number(storey, (False, True))
+        _, number, _ = get_number(storey, (False, True, False))
         if number is None:
             number = storeys.index(storey)
         self["_custom_storey_number"] = int(number)
@@ -360,7 +360,7 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
 
     def set_custom_storey_number(self, value):
         storey = next((storey for storey in get_storeys(self) if storey.Name == self.custom_storey), None)
-        set_number(storey, (None, str(value)), (False, True))
+        set_number(storey, (None, str(value), None), (False, True, False))
         self["_custom_storey_number"] = value
 
     custom_storey: bpy.props.EnumProperty(
