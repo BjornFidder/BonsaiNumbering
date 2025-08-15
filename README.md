@@ -10,6 +10,9 @@ BonsaiNumbering is a Blender add-on that provides a user interface for generatin
 - User-friendly interface accessible from the Blender sidebar.
 - Supports both object and mesh element numbering.
 
+## Usage
+The tool is combined into one Python script file, which when run in Blender, loads the tool in the UI part of the 3D viewport.
+
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
