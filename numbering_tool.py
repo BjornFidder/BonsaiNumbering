@@ -157,7 +157,6 @@ def to_letter(i, upper=False):
         remainder += 26
     return res + num2alphadict[remainder]
 
-# Numbering systems
 # Dictionary to map numbering types to functions
 numberings = {"number": to_number,
               "number_ext": to_number_ext,
@@ -350,7 +349,7 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
     def update_custom_storey(self, context):
         storeys = get_storeys(self)
         storey = next((storey for storey in storeys if storey.Name == self.custom_storey), None)
-        number = get_number(storey)
+        number = get_number(storey, "Pset_Numbering")
         if number is None: # If the number is not set, use the index
             number = storeys.index(storey)
         self["_custom_storey_number"] = int(number)
@@ -363,9 +362,9 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         storey = next((storey for storey in storeys if storey.Name == self.custom_storey), None)
         index = storeys.index(storey)
         if value == index: # If the value is the same as the index, remove the number
-            set_number(storey, None)
+            set_number(storey, None, "Pset_Numbering")
         else:
-            set_number(storey, str(value))
+            set_number(storey, str(value), "Pset_Numbering")
         self["_custom_storey_number"] = value
 
     custom_storey: bpy.props.EnumProperty(
@@ -433,7 +432,6 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         grid.operator("ifc.delete_settings", icon="TRASH", text="Delete")
         grid.operator("ifc.import_settings", icon="IMPORT", text="Import")
        
-
         # Selection box
         box = layout.box()
         box.label(text="Elements to number:")
@@ -563,8 +561,7 @@ def get_common_pset(element):
     pset_common_name = 'Pset_' + (str(ifc_type).replace('Ifc','')) + 'Common'
     return None
 
-def get_number(element):
-    save_prop = bpy.context.scene.ifc_numbering_settings.save_prop
+def get_number(element, save_prop):
     number = None
     if element is None:
         return number
@@ -578,8 +575,7 @@ def get_number(element):
     #             number = prop
     return number
 
-def set_number(element, number):
-    save_prop = bpy.context.scene.ifc_numbering_settings.save_prop
+def set_number(element, number, save_prop):
     count = 0
     if element is None:
         return count
@@ -605,8 +601,8 @@ def set_number(element, number):
     #         ifc_api.run("pset.edit_pset", ifc_file, pset=pset, properties={property_name: number})
     return count
 
-def remove_number(element):
-    return set_number(element, None)
+def remove_number(element, save_prop):
+    return set_number(element, None, save_prop)
 
 def assign_numbers(self, props):
     """Assign numbers to selected objects based on their IFC type and location."""
@@ -620,7 +616,7 @@ def assign_numbers(self, props):
                (props.visible_toggle and not obj.visible_get()):
                 element = tool.Ifc.get_entity(obj)
                 if element is not None and element.is_a("IfcElement"):
-                    remove_count += remove_number(element)
+                    remove_count += remove_number(element, props.save_prop)
 
     objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
     
@@ -646,7 +642,7 @@ def assign_numbers(self, props):
             dimensions = get_object_dimensions(obj)
             elements.append((element, location, dimensions))
         elif props.remove_toggle and element.is_a() in possible_types:
-            remove_count += remove_number(element)
+            remove_count += remove_number(element, props.save_prop)
 
     if not elements:
         self.report({'WARNING'}, f"No elements selected or available for numbering, removed {remove_count} existing numbers.")
@@ -668,19 +664,20 @@ def assign_numbers(self, props):
         type_number = type_elements.index(element)
         type_name = ifc_types[type_index][3:]
 
+        storey_number = None
         if structure := element.ContainedInStructure:
             storey = structure[0].RelatingStructure
             if storey and props.storey_numbering == "custom":
-                storey_number = get_number(storey)
+                storey_number = get_number(storey, "Pset_Numbering")
                 if storey_number is not None:
                     storey_number = int(storey_number)
-            else:
+            if storey_number is None:
                 storey_number = storeys.index(storey) if storey in storeys else None
-        elif "{S}" in props.format:
+        if storey_number is None and "{S}" in props.format:
             self.report({'WARNING'}, f"Element {element.Name} with ID {element.GlobalId} is not contained in any storey.")
 
         number = format_number(props, (element_number, type_number, storey_number), (len(objects), len(type_elements), len(storeys)), type_name)
-        number_count += set_number(element, number)
+        number_count += set_number(element, number, props.save_prop)
 
     self.report({'INFO'}, f"Renumbered {number_count} objects, removed number from {remove_count} objects.")
 
@@ -689,7 +686,7 @@ def assign_numbers(self, props):
         numbers = []
         for obj in bpy.context.scene.objects:
             element = tool.Ifc.get_entity(obj)
-            number = get_number(element)
+            number = get_number(element, props.save_prop)
             if not element.is_a("IfcElement"):
                 continue
             if number in numbers:
@@ -707,10 +704,10 @@ class IFC_AssignNumber(bpy.types.Operator):
 
     def execute(self, context):
         IfcStore.begin_transaction(self)
-        old_value = {obj.name: get_number(tool.Ifc.get_entity(obj)) for obj in bpy.context.scene.objects}
         props = context.scene.ifc_numbering_settings
+        old_value = {obj.name: get_number(tool.Ifc.get_entity(obj), props.save_prop) for obj in bpy.context.scene.objects}
         result = assign_numbers(self, props)
-        new_value = {obj.name: get_number(tool.Ifc.get_entity(obj)) for obj in bpy.context.scene.objects}
+        new_value = {obj.name: get_number(tool.Ifc.get_entity(obj), props.save_prop) for obj in bpy.context.scene.objects}
         self.transaction_data = {"old_value": old_value, "new_value": new_value}
         IfcStore.add_transaction_operation(self)
         IfcStore.end_transaction(self)
@@ -718,22 +715,25 @@ class IFC_AssignNumber(bpy.types.Operator):
 
     def rollback(self, data):
         rollback_count = 0
+        props = bpy.context.scene.ifc_numbering_settings
         for obj in bpy.context.scene.objects:
             old_number = data["old_value"].get(obj.name, None)
             element = tool.Ifc.get_entity(obj)
-            if element and old_number != get_number(element):
-                set_number(element, old_number)
+            if element and old_number != get_number(element, props.save_prop):
+                set_number(element, old_number, props.save_prop)
                 rollback_count += 1
+        props.update_custom_storey(None)  # Reset custom storey number to avoid conflicts
         bpy.ops.ifc.show_message('EXEC_DEFAULT', message=f"Rollback {rollback_count} numbers.")
         return {'FINISHED'}
     
     def commit(self, data):
         commit_count = 0
+        props = bpy.context.scene.ifc_numbering_settings
         for obj in bpy.context.scene.objects:
             new_number = data["new_value"].get(obj.name, None)
             element = tool.Ifc.get_entity(obj)
-            if element and new_number != get_number(element):
-                set_number(element, new_number)
+            if element and new_number != get_number(element, props.save_prop):
+                set_number(element, new_number, props.save_prop)
                 commit_count += 1
         bpy.ops.ifc.show_message('EXEC_DEFAULT', message=f"Commit {commit_count} numbers.")
 
