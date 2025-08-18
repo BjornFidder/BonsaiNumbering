@@ -350,8 +350,8 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
     def update_custom_storey(self, context):
         storeys = get_storeys(self)
         storey = next((storey for storey in storeys if storey.Name == self.custom_storey), None)
-        _, number, _ = get_number(storey, (False, True, False))
-        if number is None:
+        number = get_number(storey)
+        if number is None: # If the number is not set, use the index
             number = storeys.index(storey)
         self["_custom_storey_number"] = int(number)
 
@@ -359,8 +359,13 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         return int(self.get("_custom_storey_number", 0))
 
     def set_custom_storey_number(self, value):
-        storey = next((storey for storey in get_storeys(self) if storey.Name == self.custom_storey), None)
-        set_number(storey, (None, str(value), None), (False, True, False))
+        storeys = get_storeys(self)
+        storey = next((storey for storey in storeys if storey.Name == self.custom_storey), None)
+        index = storeys.index(storey)
+        if value == index: # If the value is the same as the index, remove the number
+            set_number(storey, None)
+        else:
+            set_number(storey, str(value))
         self["_custom_storey_number"] = value
 
     custom_storey: bpy.props.EnumProperty(
@@ -552,63 +557,57 @@ def cmp_within_precision(a, b, props, use_dir=True):
             return 1 if diff > 0 else -1
     return 0
 
-def save_prop_to_bool(save_prop):
-    return (save_prop == "Tag", save_prop=="Pset_Numbering", save_prop=="Pset_Common")
-
 def get_common_pset(element):
     """Get the common property set for the type of an element. If not found, return any pset with 'Common' in its name."""
     ifc_type = element.is_a()
     pset_common_name = 'Pset_' + (str(ifc_type).replace('Ifc','')) + 'Common'
     return None
 
-def get_number(element, save_prop=(True, True, True)):
-    tag, prop, prop_common = None, None, None
-    if save_prop[0] and hasattr(element, "Tag"):
-        tag = element.Tag
-    if save_prop[1] and (pset := ifc_el.get_pset(element, pset_numbering_name)):
-        prop = pset.get("Number")
-    if save_prop[2] and (pset := get_common_pset(element)):
-        for prop in pset.HasProperties:
-            if prop.Name == "Reference":
-                prop_common = prop
-    return (tag, prop, prop_common)
+def get_number(element):
+    save_prop = bpy.context.scene.ifc_numbering_settings.save_prop
+    number = None
+    if save_prop == "Tag" and hasattr(element, "Tag"):
+        number = element.Tag
+    if save_prop == "Pset_Numbering" and (pset := ifc_el.get_pset(element, pset_numbering_name)):
+        number = pset.get("Number")
+    # if save_prop == "Pset_Common" and (pset := get_common_pset(element)):
+    #     for prop in pset.HasProperties:
+    #         if prop.Name == "Reference":
+    #             number = prop
+    return number
 
-def set_number(element, number, save_prop=(True, True, True)):
+def set_number(element, number):
+    save_prop = bpy.context.scene.ifc_numbering_settings.save_prop
     count = 0
-    if save_prop[0] and hasattr(element, "Tag"):
-        count += element.Tag != number[0]
-        element.Tag = number[0]
-
-    if save_prop[1]:
+    if save_prop == "Tag" and hasattr(element, "Tag"):
+        count += element.Tag != number
+        element.Tag = number
+    if save_prop == "Pset_Numbering":
         property_name = "Number"
         if pset := ifc_el.get_pset(element, pset_numbering_name):
-            count += pset.get(property_name) != number[1]
+            count += pset.get(property_name) != number
             pset = ifc_file.by_id(pset["id"])  
         else:
-            count += number[1] is not None
+            count += number is not None
             pset = ifc_api.run("pset.add_pset", ifc_file, product=element, name=pset_numbering_name) 
-        if number[1] is None:
-            ifc_api.run("pset.remove_pset", ifc_file, product=element, pset=pset)
-        else:    
-            ifc_api.run("pset.edit_pset", ifc_file, pset=pset, properties={property_name: number[1]})
-    if save_prop[2]:
-        property_name = "Reference"
-        if pset := get_common_pset(element):
-            count += get_number(element, (False, False, True))[2] != number[2]
-            ifc_api.run("pset.edit_pset", ifc_file, pset=pset, properties={property_name: number[2]})
+        if number is None:
+            pset = ifc_api.run("pset.remove_pset", ifc_file, product=element, pset=pset)
+        else:
+            ifc_api.run("pset.edit_pset", ifc_file, pset=pset, properties={property_name: number}, should_purge=True)
+    # if save_prop == "Pset_Common":
+    #     property_name = "Reference"
+    #     if pset := get_common_pset(element):
+    #         count += get_number(element) != number
+    #         ifc_api.run("pset.edit_pset", ifc_file, pset=pset, properties={property_name: number})
     return count
 
-def remove_number(element, save_prop):
-    return set_number(element, (None, None, None), save_prop_to_bool(save_prop))
+def remove_number(element):
+    return set_number(element, None)
 
 def assign_numbers(self, props):
     """Assign numbers to selected objects based on their IFC type and location."""
     number_count = 0
     remove_count = 0
-
-    if props.save_prop == "Pset_Common":
-        self.report({'WARNING'}, "Saving to Pset Common is not yet supported")
-        return {'CANCELLED'}
 
     if props.remove_toggle:
         #Remove existing numbers
@@ -617,7 +616,7 @@ def assign_numbers(self, props):
                (props.visible_toggle and not obj.visible_get()):
                 element = tool.Ifc.get_entity(obj)
                 if element is not None and element.is_a("IfcElement"):
-                    remove_count += remove_number(element, props.save_prop)
+                    remove_count += remove_number(element)
 
     objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
     
@@ -643,7 +642,7 @@ def assign_numbers(self, props):
             dimensions = get_object_dimensions(obj)
             elements.append((element, location, dimensions))
         elif props.remove_toggle and element.is_a() in possible_types:
-            remove_count += remove_number(element, props.save_prop)
+            remove_count += remove_number(element)
 
     if not elements:
         self.report({'WARNING'}, f"No elements selected or available for numbering, removed {remove_count} existing numbers.")
@@ -668,7 +667,7 @@ def assign_numbers(self, props):
         if structure := element.ContainedInStructure:
             storey = structure[0].RelatingStructure
             if storey and props.storey_numbering == "custom":
-                storey_number = get_number(storey, (False, True))[1]
+                storey_number = get_number(storey)
                 if storey_number is not None:
                     storey_number = int(storey_number)
             else:
@@ -677,29 +676,23 @@ def assign_numbers(self, props):
             self.report({'WARNING'}, f"Element {element.Name} with ID {element.GlobalId} is not contained in any storey.")
 
         number = format_number(props, (element_number, type_number, storey_number), (len(objects), len(type_elements), len(storeys)), type_name)
-        number_count += set_number(element, (number, number, number), save_prop_to_bool(props.save_prop))
+        number_count += set_number(element, number)
 
     self.report({'INFO'}, f"Renumbered {number_count} objects, removed number from {remove_count} objects.")
 
     if props.check_duplicates_toggle:
         #Check for duplicate numbers
-        tags = []
-        pset_numbers = []
-        pset_commons = []
+        numbers = []
         for obj in bpy.context.scene.objects:
             element = tool.Ifc.get_entity(obj)
-            tag, pset_number, pset_common = get_number(element, save_prop_to_bool(props.save_prop))
+            number = get_number(element)
             if not element.is_a("IfcElement"):
                 continue
-            if tag in tags or pset_number in pset_numbers or pset_common in pset_commons:
+            if number in numbers:
                 self.report({'WARNING'}, f"The model contains duplicate numbers")
                 break
-            if props.save_prop == "Tag" and tag is not None:
-                tags.append(tag)
-            if props.save_prop == "Pset_Numbering" and pset_number is not None:
-                pset_numbers.append(pset_number)
-            if props.save_prop == "Pset_Common" and pset_common is not None:
-                pset_commons.append(pset_common)
+            if number is not None:
+                numbers.append(number)
     return {'FINISHED'}
 
 class IFC_AssignNumber(bpy.types.Operator):
@@ -722,7 +715,7 @@ class IFC_AssignNumber(bpy.types.Operator):
     def rollback(self, data):
         rollback_count = 0
         for obj in bpy.context.scene.objects:
-            old_number = data["old_value"].get(obj.name, (None, None, None))
+            old_number = data["old_value"].get(obj.name, None)
             element = tool.Ifc.get_entity(obj)
             if element and old_number != get_number(element):
                 set_number(element, old_number)
@@ -733,7 +726,7 @@ class IFC_AssignNumber(bpy.types.Operator):
     def commit(self, data):
         commit_count = 0
         for obj in bpy.context.scene.objects:
-            new_number = data["new_value"].get(obj.name, (None, None, None))
+            new_number = data["new_value"].get(obj.name, None)
             element = tool.Ifc.get_entity(obj)
             if element and new_number != get_number(element):
                 set_number(element, new_number)
