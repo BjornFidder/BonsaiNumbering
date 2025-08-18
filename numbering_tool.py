@@ -291,8 +291,8 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         name="X",
         description="Select axis direction for numbering elements",
         items=[
-            ("1", "+", "Number elements in positive X direction"),
-            ("-1", "-", "Number elements in negative X direction")
+            ("1", "+", "Number elements in order of increasing X coordinate"),
+            ("-1", "-", "Number elements in order of decreasing X coordinate")
         ],
         default="1",
     ) # pyright: ignore[reportInvalidTypeForm]
@@ -301,8 +301,8 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         name="Y",
         description="Select axis direction for numbering elements",
         items=[
-            ("1", "+", "Number elements in positive Y direction"),
-            ("-1", "-", "Number elements in negative Y direction")
+            ("1", "+", "Number elements in order of increasing Y coordinate"),
+            ("-1", "-", "Number elements in order of decreasing Y coordinate")
         ],
         default="1"
     ) # pyright: ignore[reportInvalidTypeForm]
@@ -311,8 +311,8 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         name="Z",
         description="Select axis direction for numbering elements",
         items=[
-            ("1", "+", "Number elements in positive Z direction"),
-            ("-1", "-", "Number elements in negative Z direction")
+            ("1", "+", "Number elements in order of increasing Z coordinate"),
+            ("-1", "-", "Number elements in order of decreasing Z coordinate")
         ],
         default="1"
     ) # pyright: ignore[reportInvalidTypeForm]
@@ -454,7 +454,6 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
 
     # Draw method (UI layout)
     def draw(self, layout):
-
         # Settings box
         box = layout.box()
         box.label(text="Settings")
