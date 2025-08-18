@@ -13,175 +13,234 @@ import time
 pset_numbering_name = "Pset_Numbering"
 pset_settings_name = "Pset_NumberingSettings"
 ifc_file = IfcStore.get_file()
-
-def load_types(objects):
-    """Load the available IFC types from the selected objects."""
-    if not objects:
-        return [("IfcElement", "All", "element")], {"IfcElement": 0}
-    
-    ifc_types = [("IfcElement", "All", "element")]
-    seen_types = []
-    number_counts = {"IfcElement": 0}
-
-    for obj in objects:
-        element = tool.Ifc.get_entity(obj)
-        if not element.is_a("IfcElement"):
-            continue
-        ifc_type = element.is_a() #Starts with "Ifc", which we can strip by starting from index 3 
-       
-        if ifc_type not in seen_types:
-            seen_types.append(ifc_type) 
-            ifc_types.append((ifc_type, ifc_type[3:], ifc_type[3:].lower())) # Store type as (id, name, name_lower)
-            number_counts[ifc_type] = 0
-
-        number_counts["IfcElement"] += 1
-        number_counts[ifc_type] += 1
-            
-    ifc_types.sort(key=lambda ifc_type: ifc_type[0] if ifc_type[0] != "IfcElement" else "") #Sort types alphabetically, but keeping IfcElement at index 0
-    
-    return ifc_types, number_counts
+project = ifc_file.by_type("IfcProject")[0]
 
 _possible_types = []
-def get_possible_types(self, context):
-    """Return the list of available types for selection."""
-    global _possible_types
-    props = context.scene.ifc_numbering_settings
-    objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
-    if props.visible_toggle:
-        objects = [obj for obj in objects if obj.visible_get()]
-    ifc_types, number_counts = load_types(objects)
-    possible_types = [(id, name + f": {number_counts[id]}", "") for (id, name, _) in ifc_types]
-    if possible_types != _possible_types:
-        _possible_types = possible_types
-    return _possible_types
 
-def get_storeys(props):
-    storeys = []
-    for obj in bpy.context.scene.objects:
-        element = tool.Ifc.get_entity(obj)
-        if element is not None and element.is_a("IfcBuildingStorey"):
-            location = get_object_location(obj, props)
-            storeys.append((element, location))
-    storeys.sort(key=ft.cmp_to_key(lambda a, b: cmp_within_precision(a[1], b[1], props, use_dir=False)))
-    storeys = [storey[0] for storey in storeys]  # Extract only the IfcBuildingStorey entities
-    return storeys
+class LoadTypes:
+    @staticmethod
+    def load_types(objects):
+        """Load the available IFC types from the selected objects."""
+        if not objects:
+            return [("IfcElement", "All", "element")], {"IfcElement": 0}
+        
+        ifc_types = [("IfcElement", "All", "element")]
+        seen_types = []
+        number_counts = {"IfcElement": 0}
 
-def format_number(props, number_values = (0, 0, None), max_number_values=(100, 100, 1), type_name=""):
-    """Return the formatted number for the given element, type and storey number"""
-    format = props.format
-    if "{E}" in format:
-        format = format.replace("{E}", to_numbering_string(props.initial_element_number + number_values[0], props.element_numbering, max_number_values[0]))
-    if "{T}" in format:
-        format = format.replace("{T}", to_numbering_string(props.initial_type_number + number_values[1], props.type_numbering, max_number_values[1]))
-    if "{S}" in format:
-        if number_values[2] is not None:
-            format = format.replace("{S}", to_numbering_string(props.initial_storey_number + number_values[2], props.storey_numbering, max_number_values[2]))
-        else:
-            format = format.replace("{S}", "x")
-    if "[T]" in format and len(type_name) > 0:
-        format = format.replace("[T]", type_name[0])
-    if "[TT]" in format and len(type_name) > 1:
-        format = format.replace("[TT]", "".join([c for c in type_name if c.isupper()]))
-    if "[TF]" in format:
-        format = format.replace("[TF]", type_name)
-    return format
+        for obj in objects:
+            element = tool.Ifc.get_entity(obj)
+            if not element.is_a("IfcElement"):
+                continue
+            ifc_type = element.is_a() #Starts with "Ifc", which we can strip by starting from index 3 
+        
+            if ifc_type not in seen_types:
+                seen_types.append(ifc_type) 
+                ifc_types.append((ifc_type, ifc_type[3:], ifc_type[3:].lower())) # Store type as (id, name, name_lower)
+                number_counts[ifc_type] = 0
 
-def get_type_name(props):
-    """Return type name used in preview, based on selected types"""
-    if not props.selected_types:
-        #If no types selected, return "Type"
-        return "Type"
-    #Get the type name of the selected type, excluding 'IfcElement'
-    types = props.selected_types
-    if 'IfcElement' in types:
-        types.remove('IfcElement')
-    if len(types)>0:
-        return str(list(types)[0][3:])
-    #If all selected, return type name of one of the selected types
-    all_types = _possible_types
-    if len(all_types) > 1:
-        return str(all_types[1][0][3:])
-    #If none selected, return "Type"
-    return "Type"
+            number_counts["IfcElement"] += 1
+            number_counts[ifc_type] += 1
+                
+        ifc_types.sort(key=lambda ifc_type: ifc_type[0] if ifc_type[0] != "IfcElement" else "") #Sort types alphabetically, but keeping IfcElement at index 0
+        
+        return ifc_types, number_counts
 
-def get_max_numbers(props, type_name):
-    """Return number of selected elements used in preview, based on selected types"""
-    max_element, max_type, max_storey = 0, 0, 0
-    if props.storey_numbering == 'number_ext':
-        max_storey = len(get_storeys(props))
-    if props.element_numbering == 'number_ext' or props.type_numbering == 'number_ext':
-        if not props.selected_types:
-            return max_element, max_type, max_storey
+    @staticmethod
+    def get_possible_types(prop, context):
+        """Return the list of available types for selection."""
+        global _possible_types
+        props = context.scene.ifc_numbering_settings
         objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
         if props.visible_toggle:
             objects = [obj for obj in objects if obj.visible_get()]
-        _, type_counts = load_types(objects)
-        if "IfcElement" in props.selected_types:
-            max_element = type_counts.get("IfcElement", 0) 
+        ifc_types, number_counts = LoadTypes.load_types(objects)
+        possible_types = [(id, name + f": {number_counts[id]}", "") for (id, name, _) in ifc_types]
+        if possible_types != _possible_types:
+            _possible_types = possible_types
+        return _possible_types
+
+class Storeys:
+
+    @staticmethod
+    def get_storeys(props):
+        storeys = []
+        for obj in bpy.context.scene.objects:
+            element = tool.Ifc.get_entity(obj)
+            if element is not None and element.is_a("IfcBuildingStorey"):
+                location = ObjectLocation.get_object_location(obj, props)
+                storeys.append((element, location))
+        storeys.sort(key=ft.cmp_to_key(lambda a, b: ObjectLocation.cmp_within_precision(a[1], b[1], props, use_dir=False)))
+        storeys = [storey[0] for storey in storeys]  # Extract only the IfcBuildingStorey entities
+        return storeys
+
+    @staticmethod
+    def update_custom_storey(props, context):
+        storeys = Storeys.get_storeys(props)
+        storey = next((storey for storey in storeys if storey.Name == props.custom_storey), None)
+        number = ManageNumbering.get_number(storey, "Pset_Numbering")
+        if number is None: # If the number is not set, use the index
+            number = storeys.index(storey)
+        props["_custom_storey_number"] = int(number)
+
+    @staticmethod
+    def get_custom_storey_number(props):
+        return int(props.get("_custom_storey_number", 0))
+
+    @staticmethod
+    def set_custom_storey_number(props, value):
+        storeys = Storeys.get_storeys(props)
+        storey = next((storey for storey in storeys if storey.Name == props.custom_storey), None)
+        index = storeys.index(storey)
+        if value == index: # If the value is the same as the index, remove the number
+            ManageNumbering.set_number(storey, None, "Pset_Numbering")
         else:
-            max_element = sum(type_counts.get(t, 0) for t in props.selected_types)
-        max_type = type_counts.get('Ifc' + type_name, max_element)
-    return max_element, max_type, max_storey
+            ManageNumbering.set_number(storey, str(value), "Pset_Numbering")
+        props["_custom_storey_number"] = value
 
-def to_number(i):
-    """Convert a number to a string."""
-    if i < 0:
-        return "(" + str(-i) + ")"
-    return str(i)
+    @staticmethod
+    def get_storey_number(element, storeys, props):
+        storey_number = None
+        if structure := element.ContainedInStructure:
+            storey = structure[0].RelatingStructure
+            if storey and props.storey_numbering == "custom":
+                storey_number = ManageNumbering.get_number(storey, "Pset_Numbering")
+                if storey_number is not None:
+                    storey_number = int(storey_number)
+            if storey_number is None:
+                storey_number = storeys.index(storey) if storey in storeys else None
+        return storey_number
 
-def to_number_ext(i, length=2):
-    """Convert a number to a string with leading zeroes."""
-    if i < 0:
-        return "(" + to_number_ext(-i, length) + ")"
-    res = str(i)
-    while len(res) < length:
-        res = "0" + res
-    return res
+class NumberFormatting:
 
-def to_letter(i, upper=False):
-    """Convert a number to a letter or sequence of letters."""
-    if i == 0:
-        return "0"
-    if i < 0:
-        return "(" + to_letter(-i, upper) + ")"
+    @staticmethod
+    def format_number(props, number_values = (0, 0, None), max_number_values=(100, 100, 1), type_name=""):
+        """Return the formatted number for the given element, type and storey number"""
+        format = props.format
+        if "{E}" in format:
+            format = format.replace("{E}", NumberingSystems.to_numbering_string(props.initial_element_number + number_values[0], props.element_numbering, max_number_values[0]))
+        if "{T}" in format:
+            format = format.replace("{T}", NumberingSystems.to_numbering_string(props.initial_type_number + number_values[1], props.type_numbering, max_number_values[1]))
+        if "{S}" in format:
+            if number_values[2] is not None:
+                format = format.replace("{S}", NumberingSystems.to_numbering_string(props.initial_storey_number + number_values[2], props.storey_numbering, max_number_values[2]))
+            else:
+                format = format.replace("{S}", "x")
+        if "[T]" in format and len(type_name) > 0:
+            format = format.replace("[T]", type_name[0])
+        if "[TT]" in format and len(type_name) > 1:
+            format = format.replace("[TT]", "".join([c for c in type_name if c.isupper()]))
+        if "[TF]" in format:
+            format = format.replace("[TF]", type_name)
+        return format
 
-    num2alphadict = dict(zip(range(1, 27), string.ascii_uppercase if upper else string.ascii_lowercase))
-    res = ""
-    numloops = (i-1) // 26
+    @staticmethod
+    def get_type_name(props):
+        """Return type name used in preview, based on selected types"""
+        if not props.selected_types:
+            #If no types selected, return "Type"
+            return "Type"
+        #Get the type name of the selected type, excluding 'IfcElement'
+        types = props.selected_types
+        if 'IfcElement' in types:
+            types.remove('IfcElement')
+        if len(types)>0:
+            return str(list(types)[0][3:])
+        #If all selected, return type name of one of the selected types
+        all_types = _possible_types
+        if len(all_types) > 1:
+            return str(all_types[1][0][3:])
+        #If none selected, return "Type"
+        return "Type"
+
+    @staticmethod
+    def get_max_numbers(props, type_name):
+        """Return number of selected elements used in preview, based on selected types"""
+        max_element, max_type, max_storey = 0, 0, 0
+        if props.storey_numbering == 'number_ext':
+            max_storey = len(Storeys.get_storeys(props))
+        if props.element_numbering == 'number_ext' or props.type_numbering == 'number_ext':
+            if not props.selected_types:
+                return max_element, max_type, max_storey
+            objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
+            if props.visible_toggle:
+                objects = [obj for obj in objects if obj.visible_get()]
+            _, type_counts = LoadTypes.load_types(objects)
+            if "IfcElement" in props.selected_types:
+                max_element = type_counts.get("IfcElement", 0) 
+            else:
+                max_element = sum(type_counts.get(t, 0) for t in props.selected_types)
+            max_type = type_counts.get('Ifc' + type_name, max_element)
+        return max_element, max_type, max_storey
+
+    @staticmethod
+    def get_format_preview(props):
+        type_name = NumberFormatting.get_type_name(props)
+        return NumberFormatting.format_number(props, (0, 0, 0), NumberFormatting.get_max_numbers(props, type_name), type_name)
+
+class NumberingSystems:
     
-    if numloops > 0:
-        res = res + to_letter(numloops, upper)
+    @staticmethod
+    def to_number(i):
+        """Convert a number to a string."""
+        if i < 0:
+            return "(" + str(-i) + ")"
+        return str(i)
+
+    @staticmethod
+    def to_number_ext(i, length=2):
+        """Convert a number to a string with leading zeroes."""
+        if i < 0:
+            return "(" + NumberingSystems.to_number_ext(-i, length) + ")"
+        res = str(i)
+        while len(res) < length:
+            res = "0" + res
+        return res
+
+    @staticmethod
+    def to_letter(i, upper=False):
+        """Convert a number to a letter or sequence of letters."""
+        if i == 0:
+            return "0"
+        if i < 0:
+            return "(" + NumberingSystems.to_letter(-i, upper) + ")"
         
-    remainder = i % 26
-    if remainder == 0:
-        remainder += 26
-    return res + num2alphadict[remainder]
+        num2alphadict = dict(zip(range(1, 27), string.ascii_uppercase if upper else string.ascii_lowercase))
+        res = ""
+        numloops = (i-1) // 26
+        
+        if numloops > 0:
+            res = res + NumberingSystems.to_letter(numloops, upper)
+            
+        remainder = i % 26
+        if remainder == 0:
+            remainder += 26
+        return res + num2alphadict[remainder]
+    
+    @staticmethod
+    def get_numberings():
+        return {
+            "number": NumberingSystems.to_number,
+            "number_ext": NumberingSystems.to_number_ext,
+            "lower_letter": NumberingSystems.to_letter,
+            "upper_letter": lambda x: NumberingSystems.to_letter(x, True)
+        }
 
-# Dictionary to map numbering types to functions
-numberings = {"number": to_number,
-              "number_ext": to_number_ext,
-              "lower_letter": to_letter,
-              "upper_letter": lambda x: to_letter(x, True)
-              }
+    def to_numbering_string(i, numbering_system, max_number):
+        """Convert a number to a string based on the numbering system."""
+        if numbering_system == "number_ext":
+            # Determine the length based on the maximum number
+            length = len(str(max_number))
+            return NumberingSystems.to_number_ext(i, length)
+        if numbering_system == "custom":
+            return NumberingSystems.to_number(i)
+        return NumberingSystems.get_numberings()[numbering_system](i)
 
-def to_numbering_string(i, numbering_type, max_number):
-    """Convert a number to a string based on the numbering system."""
-    if numbering_type == "number_ext":
-        # Determine the length based on the maximum number
-        length = len(str(max_number))
-        return to_number_ext(i, length)
-    if numbering_type == "custom":
-        return to_number(i)
-    return numberings[numbering_type](i)
+    def get_numbering_preview(numbering_system, initial):
+        """Get a preview of the numbering string for a given number and type."""
+        numbers = [NumberingSystems.to_numbering_string(i, numbering_system, 10) for i in range(initial, initial + 3)]
+        return "{0}, {1}, {2}, ...".format(*numbers)
 
-def get_numbering_preview(numbering_type, initial):
-    """Get a preview of the numbering string for a given number and type."""
-    numbers = [to_numbering_string(i, numbering_type, 10) for i in range(initial, initial + 3)]
-    return "{0}, {1}, {2}, ...".format(*numbers)
-
-def get_format_preview(props):
-    type_name = get_type_name(props)
-    return format_number(props, (0, 0, 0), get_max_numbers(props, type_name), type_name)
 
 # Settings (user input fields)
 class IFC_NumberingSettings(bpy.types.PropertyGroup):
@@ -192,7 +251,7 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
     ) # pyright: ignore[reportInvalidTypeForm]
 
     def get_saved_settings_items(self, context):
-        settings_names = get_settings_names()
+        settings_names = Settings.get_settings_names()
         if not settings_names:
             return [("NONE", "No saved settings", "")]
         return [(name, name, "") for name in settings_names]
@@ -204,7 +263,7 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
     ) # pyright: ignore[reportInvalidTypeForm]
 
     def update_format_preview(self, context):
-        self["_format_preview"] = get_format_preview(self)
+        self["_format_preview"] = NumberFormatting.get_format_preview(self)
 
     selected_toggle: bpy.props.BoolProperty(
         name="Selected only",
@@ -223,7 +282,7 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
     selected_types: bpy.props.EnumProperty(
         name="Of type",
         description="Select which types of elements to number",
-        items= get_possible_types,
+        items= LoadTypes.get_possible_types,
         options={'ENUM_FLAG'},
         update=update_format_preview
     ) # pyright: ignore[reportInvalidTypeForm]
@@ -312,10 +371,10 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
     ) # pyright: ignore[reportInvalidTypeForm]
 
     numberings_enum = lambda self, initial : [
-            ("number", get_numbering_preview("number", initial), "Use numbers. Negative numbers are shown with brackets"),
-            ("number_ext", get_numbering_preview("number_ext", initial), "Use numbers padded with zeroes to a fixed length based on the number of objects selected. Negative numbers are shown with brackets."),
-            ("lower_letter", get_numbering_preview("lower_letter", initial), "Use lowercase letters, continuing with aa, ab, ... where negative numbers are shown with brackets."),
-            ("upper_letter", get_numbering_preview("upper_letter", initial), "Use uppercase letters, continuing with AA, AB, ... where negative numbers are shown with brackets."),
+            ("number", NumberingSystems.get_numbering_preview("number", initial), "Use numbers. Negative numbers are shown with brackets"),
+            ("number_ext", NumberingSystems.get_numbering_preview("number_ext", initial), "Use numbers padded with zeroes to a fixed length based on the number of objects selected. Negative numbers are shown with brackets."),
+            ("lower_letter", NumberingSystems.get_numbering_preview("lower_letter", initial), "Use lowercase letters, continuing with aa, ab, ... where negative numbers are shown with brackets."),
+            ("upper_letter", NumberingSystems.get_numbering_preview("upper_letter", initial), "Use uppercase letters, continuing with AA, AB, ... where negative numbers are shown with brackets."),
     ]
 
     custom_storey_enum = [("custom", "Custom", "Use custom numbering for storeys")]
@@ -345,40 +404,18 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         update=update_storey_numbering
     )    # pyright: ignore[reportInvalidTypeForm]
 
-    #Properties for custom storey numbering
-    def update_custom_storey(self, context):
-        storeys = get_storeys(self)
-        storey = next((storey for storey in storeys if storey.Name == self.custom_storey), None)
-        number = get_number(storey, "Pset_Numbering")
-        if number is None: # If the number is not set, use the index
-            number = storeys.index(storey)
-        self["_custom_storey_number"] = int(number)
-
-    def get_custom_storey_number(self):
-        return int(self.get("_custom_storey_number", 0))
-
-    def set_custom_storey_number(self, value):
-        storeys = get_storeys(self)
-        storey = next((storey for storey in storeys if storey.Name == self.custom_storey), None)
-        index = storeys.index(storey)
-        if value == index: # If the value is the same as the index, remove the number
-            set_number(storey, None, "Pset_Numbering")
-        else:
-            set_number(storey, str(value), "Pset_Numbering")
-        self["_custom_storey_number"] = value
-
     custom_storey: bpy.props.EnumProperty(
         name = "Storey",
         description = "Select storey to number",
-        items = lambda self, _: [(storey.Name, storey.Name, f"{storey.Name}\nID: {storey.GlobalId}") for storey in get_storeys(self)],
-        update = update_custom_storey
+        items = lambda self, _: [(storey.Name, storey.Name, f"{storey.Name}\nID: {storey.GlobalId}") for storey in Storeys.get_storeys(self)],
+        update = Storeys.update_custom_storey
     ) # pyright: ignore[reportInvalidTypeForm]
 
     custom_storey_number: bpy.props.IntProperty(
         name = "Storey number",
         description = f"Set custom storey number for selected storey, stored in the {pset_numbering_name} property set of the IFC element",
-        get = get_custom_storey_number,
-        set = set_custom_storey_number
+        get = Storeys.get_custom_storey_number,
+        set = Storeys.set_custom_storey_number
     ) # pyright: ignore[reportInvalidTypeForm]
     
     format: bpy.props.StringProperty(
@@ -494,7 +531,7 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         # Show preview in a textbox style (non-editable)
         grid.label(text="Preview:")
         preview_box = grid.box()
-        preview_box.label(text=self.get("_format_preview", get_format_preview(self)))
+        preview_box.label(text=self.get("_format_preview", NumberFormatting.get_format_preview(self)))
 
         # Storage options
         box = layout.box()
@@ -511,98 +548,106 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         
 # 2. Operator (button logic)
 
-def get_object_location(obj, props):
-    """Get the location of a Blender object."""
-    
-    mat = obj.matrix_world
-    bbox_vectors = [mat @ Vector(b) for b in obj.bound_box]
+class ObjectLocation:
+    @staticmethod
+    def get_object_location(obj, props):
+        """Get the location of a Blender object."""
+        mat = obj.matrix_world
+        bbox_vectors = [mat @ Vector(b) for b in obj.bound_box]
 
-    if props.location_type == "CENTER":
-        return 0.125 * sum(bbox_vectors, Vector())
-    
-    elif props.location_type == "BOUNDING_BOX":
-        bbox_vector = Vector((0, 0, 0))
-        # Determine the coordinates based on the direction and axis order
-        direction = (int(props.x_direction), int(props.y_direction), int(props.z_direction))
-        for i in range(3):
-            if direction[i] == 1:
-                bbox_vector[i] = min(v[i] for v in bbox_vectors)
-            else:
-                bbox_vector[i] = max(v[i] for v in bbox_vectors)
-        return bbox_vector
+        if props.location_type == "CENTER":
+            return 0.125 * sum(bbox_vectors, Vector())
 
-def get_object_dimensions(obj):
-    """Get the dimensions of a Blender object."""
-    # Get the object's bounding box corners in world space
-    mat = obj.matrix_world
-    coords = [mat @ Vector(corner) for corner in obj.bound_box]
+        elif props.location_type == "BOUNDING_BOX":
+            bbox_vector = Vector((0, 0, 0))
+            # Determine the coordinates based on the direction and axis order
+            direction = (int(props.x_direction), int(props.y_direction), int(props.z_direction))
+            for i in range(3):
+                if direction[i] == 1:
+                    bbox_vector[i] = min(v[i] for v in bbox_vectors)
+                else:
+                    bbox_vector[i] = max(v[i] for v in bbox_vectors)
+            return bbox_vector
 
-    # Compute min and max coordinates
-    min_corner = Vector((min(v[i] for v in coords) for i in range(3)))
-    max_corner = Vector((max(v[i] for v in coords) for i in range(3)))
+    @staticmethod
+    def get_object_dimensions(obj):
+        """Get the dimensions of a Blender object."""
+        # Get the object's bounding box corners in world space
+        mat = obj.matrix_world
+        coords = [mat @ Vector(corner) for corner in obj.bound_box]
 
-    # Dimensions in global space
-    dimensions = max_corner - min_corner
-    return dimensions
+        # Compute min and max coordinates
+        min_corner = Vector((min(v[i] for v in coords) for i in range(3)))
+        max_corner = Vector((max(v[i] for v in coords) for i in range(3)))
 
-def cmp_within_precision(a, b, props, use_dir=True):
-    """Compare two vectors within a given precision."""
-    direction = (int(props.x_direction), int(props.y_direction), int(props.z_direction)) if use_dir else (1, 1, 1)
-    for axis in props.axis_order:
-        idx = "XYZ".index(axis)
-        diff = (a[idx] - b[idx]) * direction[idx]
-        if 1000*abs(diff) > props.precision[idx]:
-            return 1 if diff > 0 else -1
-    return 0
+        # Dimensions in global space
+        dimensions = max_corner - min_corner
+        return dimensions
 
-def get_common_pset(element):
-    """Get the common property set for the type of an element. If not found, return any pset with 'Common' in its name."""
-    ifc_type = element.is_a()
-    pset_common_name = 'Pset_' + (str(ifc_type).replace('Ifc','')) + 'Common'
-    return None
+    @staticmethod
+    def cmp_within_precision(a, b, props, use_dir=True):
+        """Compare two vectors within a given precision."""
+        direction = (int(props.x_direction), int(props.y_direction), int(props.z_direction)) if use_dir else (1, 1, 1)
+        for axis in props.axis_order:
+            idx = "XYZ".index(axis)
+            diff = (a[idx] - b[idx]) * direction[idx]
+            if 1000 * abs(diff) > props.precision[idx]:
+                return 1 if diff > 0 else -1
+        return 0
 
-def get_number(element, save_prop):
-    number = None
-    if element is None:
+class ManageNumbering:
+    @staticmethod
+    def get_common_pset(element):
+        """Get the common property set for the type of an element. If not found, return any pset with 'Common' in its name."""
+        ifc_type = element.is_a()
+        pset_common_name = 'Pset_' + (str(ifc_type).replace('Ifc','')) + 'Common'
+        return None
+
+    @staticmethod
+    def get_number(element, save_prop):
+        number = None
+        if element is None:
+            return number
+        if save_prop == "Tag" and hasattr(element, "Tag"):
+            number = element.Tag
+        if save_prop == "Pset_Numbering" and (pset := ifc_el.get_pset(element, pset_numbering_name)):
+            number = pset.get("Number")
+        # if save_prop == "Pset_Common" and (pset := get_common_pset(element)):
+        #     for prop in pset.HasProperties:
+        #         if prop.Name == "Reference":
+        #             number = prop
         return number
-    if save_prop == "Tag" and hasattr(element, "Tag"):
-        number = element.Tag
-    if save_prop == "Pset_Numbering" and (pset := ifc_el.get_pset(element, pset_numbering_name)):
-        number = pset.get("Number")
-    # if save_prop == "Pset_Common" and (pset := get_common_pset(element)):
-    #     for prop in pset.HasProperties:
-    #         if prop.Name == "Reference":
-    #             number = prop
-    return number
 
-def set_number(element, number, save_prop):
-    count = 0
-    if element is None:
+    @staticmethod
+    def set_number(element, number, save_prop):
+        count = 0
+        if element is None:
+            return count
+        if save_prop == "Tag" and hasattr(element, "Tag"):
+            count += element.Tag != number
+            element.Tag = number
+        if save_prop == "Pset_Numbering":
+            property_name = "Number"
+            if pset := ifc_el.get_pset(element, pset_numbering_name):
+                count += pset.get(property_name) != number
+                pset = ifc_file.by_id(pset["id"])  
+            else:
+                count += number is not None
+                pset = ifc_api.run("pset.add_pset", ifc_file, product=element, name=pset_numbering_name) 
+            if number is None:
+                pset = ifc_api.run("pset.remove_pset", ifc_file, product=element, pset=pset)
+            else:
+                ifc_api.run("pset.edit_pset", ifc_file, pset=pset, properties={property_name: number}, should_purge=True)
+        # if save_prop == "Pset_Common":
+        #     property_name = "Reference"
+        #     if pset := get_common_pset(element):
+        #         count += get_number(element) != number
+        #         ifc_api.run("pset.edit_pset", ifc_file, pset=pset, properties={property_name: number})
         return count
-    if save_prop == "Tag" and hasattr(element, "Tag"):
-        count += element.Tag != number
-        element.Tag = number
-    if save_prop == "Pset_Numbering":
-        property_name = "Number"
-        if pset := ifc_el.get_pset(element, pset_numbering_name):
-            count += pset.get(property_name) != number
-            pset = ifc_file.by_id(pset["id"])  
-        else:
-            count += number is not None
-            pset = ifc_api.run("pset.add_pset", ifc_file, product=element, name=pset_numbering_name) 
-        if number is None:
-            pset = ifc_api.run("pset.remove_pset", ifc_file, product=element, pset=pset)
-        else:
-            ifc_api.run("pset.edit_pset", ifc_file, pset=pset, properties={property_name: number}, should_purge=True)
-    # if save_prop == "Pset_Common":
-    #     property_name = "Reference"
-    #     if pset := get_common_pset(element):
-    #         count += get_number(element) != number
-    #         ifc_api.run("pset.edit_pset", ifc_file, pset=pset, properties={property_name: number})
-    return count
 
-def remove_number(element, save_prop):
-    return set_number(element, None, save_prop)
+    @staticmethod
+    def remove_number(element, save_prop):
+        return ManageNumbering.set_number(element, None, save_prop)
 
 def assign_numbers(self, props):
     """Assign numbers to selected objects based on their IFC type and location."""
@@ -610,13 +655,12 @@ def assign_numbers(self, props):
     remove_count = 0
 
     if props.remove_toggle:
-        #Remove existing numbers
         for obj in bpy.context.scene.objects:
             if (props.selected_toggle and obj not in bpy.context.selected_objects) or \
                (props.visible_toggle and not obj.visible_get()):
                 element = tool.Ifc.get_entity(obj)
                 if element is not None and element.is_a("IfcElement"):
-                    remove_count += remove_number(element, props.save_prop)
+                    remove_count += ManageNumbering.remove_number(element, props.save_prop)
 
     objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
     
@@ -638,23 +682,23 @@ def assign_numbers(self, props):
         if element is None:
             continue
         if element.is_a() in selected_types:
-            location = get_object_location(obj, props)
-            dimensions = get_object_dimensions(obj)
+            location = ObjectLocation.get_object_location(obj, props)
+            dimensions = ObjectLocation.get_object_dimensions(obj)
             elements.append((element, location, dimensions))
         elif props.remove_toggle and element.is_a() in possible_types:
-            remove_count += remove_number(element, props.save_prop)
+            remove_count += ManageNumbering.remove_number(element, props.save_prop)
 
     if not elements:
         self.report({'WARNING'}, f"No elements selected or available for numbering, removed {remove_count} existing numbers.")
         return {'CANCELLED'}
 
-    elements.sort(key=ft.cmp_to_key(lambda a, b: cmp_within_precision(a[2], b[2], props, use_dir=False)))
+    elements.sort(key=ft.cmp_to_key(lambda a, b: ObjectLocation.cmp_within_precision(a[2], b[2], props, use_dir=False)))
 
-    elements.sort(key=ft.cmp_to_key(lambda a, b: cmp_within_precision(a[1], b[1], props)))
+    elements.sort(key=ft.cmp_to_key(lambda a, b: ObjectLocation.cmp_within_precision(a[1], b[1], props)))
 
-    storeys = get_storeys(props)
+    storeys = Storeys.get_storeys(props)
 
-    ifc_types = [t[0] for t in load_types(objects)[0]]
+    ifc_types = [t[0] for t in LoadTypes.load_types(objects)[0]]
     elements_by_type = [[element for (element, _, _) in elements if element.is_a() == ifc_type] for ifc_type in ifc_types]
 
     for (element_number, (element, _, _)) in enumerate(elements):
@@ -664,20 +708,12 @@ def assign_numbers(self, props):
         type_number = type_elements.index(element)
         type_name = ifc_types[type_index][3:]
 
-        storey_number = None
-        if structure := element.ContainedInStructure:
-            storey = structure[0].RelatingStructure
-            if storey and props.storey_numbering == "custom":
-                storey_number = get_number(storey, "Pset_Numbering")
-                if storey_number is not None:
-                    storey_number = int(storey_number)
-            if storey_number is None:
-                storey_number = storeys.index(storey) if storey in storeys else None
+        storey_number = Storeys.get_storey_number(element, storeys, props)
         if storey_number is None and "{S}" in props.format:
             self.report({'WARNING'}, f"Element {element.Name} with ID {element.GlobalId} is not contained in any storey.")
 
-        number = format_number(props, (element_number, type_number, storey_number), (len(objects), len(type_elements), len(storeys)), type_name)
-        number_count += set_number(element, number, props.save_prop)
+        number = NumberFormatting.format_number(props, (element_number, type_number, storey_number), (len(objects), len(type_elements), len(storeys)), type_name)
+        number_count += ManageNumbering.set_number(element, number, props.save_prop)
 
     self.report({'INFO'}, f"Renumbered {number_count} objects, removed number from {remove_count} objects.")
 
@@ -686,7 +722,7 @@ def assign_numbers(self, props):
         numbers = []
         for obj in bpy.context.scene.objects:
             element = tool.Ifc.get_entity(obj)
-            number = get_number(element, props.save_prop)
+            number = ManageNumbering.get_number(element, props.save_prop)
             if not element.is_a("IfcElement"):
                 continue
             if number in numbers:
@@ -705,35 +741,37 @@ class IFC_AssignNumber(bpy.types.Operator):
     def execute(self, context):
         IfcStore.begin_transaction(self)
         props = context.scene.ifc_numbering_settings
-        old_value = {obj.name: get_number(tool.Ifc.get_entity(obj), props.save_prop) for obj in bpy.context.scene.objects}
+        old_value = {obj.name: ManageNumbering.get_number(tool.Ifc.get_entity(obj), props.save_prop) for obj in bpy.context.scene.objects}
         result = assign_numbers(self, props)
-        new_value = {obj.name: get_number(tool.Ifc.get_entity(obj), props.save_prop) for obj in bpy.context.scene.objects}
+        new_value = {obj.name: ManageNumbering.get_number(tool.Ifc.get_entity(obj), props.save_prop) for obj in bpy.context.scene.objects}
         self.transaction_data = {"old_value": old_value, "new_value": new_value}
         IfcStore.add_transaction_operation(self)
         IfcStore.end_transaction(self)
         return result
 
     def rollback(self, data):
+        """Support undo of number assignment"""
         rollback_count = 0
         props = bpy.context.scene.ifc_numbering_settings
         for obj in bpy.context.scene.objects:
             old_number = data["old_value"].get(obj.name, None)
             element = tool.Ifc.get_entity(obj)
-            if element and old_number != get_number(element, props.save_prop):
-                set_number(element, old_number, props.save_prop)
+            if element and old_number != ManageNumbering.get_number(element, props.save_prop):
+                ManageNumbering.set_number(element, old_number, props.save_prop)
                 rollback_count += 1
         props.update_custom_storey(None)  # Reset custom storey number to avoid conflicts
         bpy.ops.ifc.show_message('EXEC_DEFAULT', message=f"Rollback {rollback_count} numbers.")
         return {'FINISHED'}
     
     def commit(self, data):
+        """Support redo of number assignment"""
         commit_count = 0
         props = bpy.context.scene.ifc_numbering_settings
         for obj in bpy.context.scene.objects:
             new_number = data["new_value"].get(obj.name, None)
             element = tool.Ifc.get_entity(obj)
-            if element and new_number != get_number(element, props.save_prop):
-                set_number(element, new_number, props.save_prop)
+            if element and new_number != ManageNumbering.get_number(element, props.save_prop):
+                ManageNumbering.set_number(element, new_number, props.save_prop)
                 commit_count += 1
         bpy.ops.ifc.show_message('EXEC_DEFAULT', message=f"Commit {commit_count} numbers.")
 
@@ -746,119 +784,127 @@ class IFC_ShowMessage(bpy.types.Operator):
     def execute(self, context):
         self.report({'INFO'}, self.message)
         return {'FINISHED'}
-    
-#Numbering tool settings saving and loading
-project = ifc_file.by_type("IfcProject")[0]
 
-settings_dict = lambda props: {
-    "selected_toggle": props.selected_toggle,
-    "selected_types": list(props.selected_types),
-    "visible_toggle": props.visible_toggle,
-    "x_direction": props.x_direction,
-    "y_direction": props.y_direction,
-    "z_direction": props.z_direction,
-    "axis_order": props.axis_order,
-    "location_type": props.location_type,
-    "precision": str((props.precision[0], props.precision[1], props.precision[2])),
-    "initial_element_number": props.initial_element_number,
-    "initial_type_number": props.initial_type_number,
-    "initial_storey_number": props.initial_storey_number,
-    "element_numbering": props.element_numbering,
-    "type_numbering": props.type_numbering,
-    "storey_numbering": props.storey_numbering,
-    "format": props.format,
-    "save_prop": props.save_prop,
-    "remove_toggle": str(props.remove_toggle),
-    "check_duplicates_toggle": str(props.check_duplicates_toggle),
-}
+class Settings:
 
-def save_settings(self, props):
-    """Save the numbering settings to the IFC file."""
-    # Save multiple settings by name in a dictionary
-    settings_name = props.settings_name.strip()
-    if not settings_name:
-        self.report({'ERROR'}, "Please enter a name for the settings.")
-        return {'CANCELLED'}
-    if pset_settings := ifc_el.get_pset(project, pset_settings_name):
-        pset_settings = ifc_file.by_id(pset_settings["id"])
-    else:
-        pset_settings = ifc_api.run("pset.add_pset", ifc_file, product=project, name=pset_settings_name)
-    if not pset_settings:
-        self.report({'ERROR'}, "Could not create property set")
-        return {'CANCELLED'}
-    ifc_api.run("pset.edit_pset", ifc_file, pset=pset_settings, properties={settings_name: json.dumps(settings_dict(props))})
-    self.report({'INFO'}, f"Saved settings '{settings_name}' to IFCProject element")
-    return {'FINISHED'}
+    @staticmethod
+    def get_dict(props):
+        """Convert the properties to a dictionary for saving."""
+        return {
+            "selected_toggle": props.selected_toggle,
+            "selected_types": list(props.selected_types),
+            "visible_toggle": props.visible_toggle,
+            "x_direction": props.x_direction,
+            "y_direction": props.y_direction,
+            "z_direction": props.z_direction,
+            "axis_order": props.axis_order,
+            "location_type": props.location_type,
+            "precision": str((props.precision[0], props.precision[1], props.precision[2])),
+            "initial_element_number": props.initial_element_number,
+            "initial_type_number": props.initial_type_number,
+            "initial_storey_number": props.initial_storey_number,
+            "element_numbering": props.element_numbering,
+            "type_numbering": props.type_numbering,
+            "storey_numbering": props.storey_numbering,
+            "format": props.format,
+            "save_prop": props.save_prop,
+            "remove_toggle": str(props.remove_toggle),
+            "check_duplicates_toggle": str(props.check_duplicates_toggle),
+            }
 
-def read_settings(self, settings, props):
-    for key, value in settings.items():
-        if key == "selected_types":
-            possible_type_names = [t[0] for t in _possible_types]
-            value = set([type_name for type_name in value if type_name in possible_type_names])
-        if key == "precision":
-            value = tuple(map(int, value.strip("()").split(",")))
-        if value == "True" or value == "False":
-            value = (value=="True")
-        try:
-            setattr(props, key, value)
-        except Exception as e:
-            self.report({'ERROR'}, f"Failed to set property '{key}': {e}")
-
-def get_settings_names():
-    project = ifc_file.by_type("IfcProject")[0]
-    if pset := ifc_el.get_pset(project, pset_settings_name):
-        names = list(pset.keys())
-        names.remove("id")
-        return names
-    else:
-        return []
-
-def load_settings(self, props):
-    # Load selected settings by name
-    settings_name = props.saved_settings
-    if settings_name == "NONE":
-        self.report({'WARNING'}, "No saved settings to load.")
-        return {'CANCELLED'}
-    if pset_settings := ifc_el.get_pset(project, pset_settings_name):
-        settings = pset_settings.get(settings_name, None)
-        if settings is None:
-            self.report({'WARNING'}, f"Settings '{settings_name}' not found.")
+    @staticmethod
+    def save_settings(operator, props):
+        """Save the numbering settings to the IFC file."""
+        # Save multiple settings by name in a dictionary
+        settings_name = props.settings_name.strip()
+        if not settings_name:
+            operator.report({'ERROR'}, "Please enter a name for the settings.")
             return {'CANCELLED'}
-        settings = json.loads(settings)
-        read_settings(self, settings, props)
-        self.report({'INFO'}, f"Loaded settings '{settings_name}' from IFCProject element")
-        return {'FINISHED'}
-    else:
-        self.report({'WARNING'}, "No settings found")
-        return {'CANCELLED'}
-
-def delete_settings(self, props):
-    settings_name = props.saved_settings
-    if settings_name == "NONE":
-        self.report({'WARNING'}, "No saved settings to delete.")
-        return {'CANCELLED'}
-    if pset_settings := ifc_el.get_pset(project, pset_settings_name):
-        if settings_name in pset_settings:
+        if pset_settings := ifc_el.get_pset(project, pset_settings_name):
             pset_settings = ifc_file.by_id(pset_settings["id"])
-            ifc_api.run("pset.edit_pset", ifc_file, pset=pset_settings, properties={settings_name: None}, should_purge=True)
-            self.report({'INFO'}, f"Deleted settings '{settings_name}' from IFCProject element")
+        else:
+            pset_settings = ifc_api.run("pset.add_pset", ifc_file, product=project, name=pset_settings_name)
+        if not pset_settings:
+            operator.report({'ERROR'}, "Could not create property set")
+            return {'CANCELLED'}
+        ifc_api.run("pset.edit_pset", ifc_file, pset=pset_settings, properties={settings_name: json.dumps(Settings.get_dict(props))})
+        operator.report({'INFO'}, f"Saved settings '{settings_name}' to IFCProject element")
+        return {'FINISHED'}
+
+    @staticmethod
+    def read_settings(operator, settings, props):
+        for key, value in settings.items():
+            if key == "selected_types":
+                possible_type_names = [t[0] for t in _possible_types]
+                value = set([type_name for type_name in value if type_name in possible_type_names])
+            if key == "precision":
+                value = tuple(map(int, value.strip("()").split(",")))
+            if value == "True" or value == "False":
+                value = (value=="True")
+            try:
+                setattr(props, key, value)
+            except Exception as e:
+                operator.report({'ERROR'}, f"Failed to set property '{key}': {e}")
+
+    @staticmethod
+    def get_settings_names():
+        project = ifc_file.by_type("IfcProject")[0]
+        if pset := ifc_el.get_pset(project, pset_settings_name):
+            names = list(pset.keys())
+            names.remove("id")
+            return names
+        else:
+            return []
+
+    @staticmethod
+    def load_settings(operator, props):
+        # Load selected settings by name
+        settings_name = props.saved_settings
+        if settings_name == "NONE":
+            operator.report({'WARNING'}, "No saved settings to load.")
+            return {'CANCELLED'}
+        if pset_settings := ifc_el.get_pset(project, pset_settings_name):
+            settings = pset_settings.get(settings_name, None)
+            if settings is None:
+                operator.report({'WARNING'}, f"Settings '{settings_name}' not found.")
+                return {'CANCELLED'}
+            settings = json.loads(settings)
+            Settings.read_settings(operator, settings, props)
+            operator.report({'INFO'}, f"Loaded settings '{settings_name}' from IFCProject element")
             return {'FINISHED'}
         else:
-            self.report({'WARNING'}, f"Settings '{settings_name}' not found.")
+            operator.report({'WARNING'}, "No settings found")
             return {'CANCELLED'}
-    else:
-        self.report({'WARNING'}, "No settings found")
-        return {'CANCELLED'}
+    
+    @staticmethod
+    def delete_settings(operator, props):
+        settings_name = props.saved_settings
+        if settings_name == "NONE":
+            operator.report({'WARNING'}, "No saved settings to delete.")
+            return {'CANCELLED'}
+        if pset_settings := ifc_el.get_pset(project, pset_settings_name):
+            if settings_name in pset_settings:
+                pset_settings = ifc_file.by_id(pset_settings["id"])
+                ifc_api.run("pset.edit_pset", ifc_file, pset=pset_settings, properties={settings_name: None}, should_purge=True)
+                operator.report({'INFO'}, f"Deleted settings '{settings_name}' from IFCProject element")
+                return {'FINISHED'}
+            else:
+                operator.report({'WARNING'}, f"Settings '{settings_name}' not found.")
+                return {'CANCELLED'}
+        else:
+            operator.report({'WARNING'}, "No settings found")
+            return {'CANCELLED'}
 
-def clear_settings(self, props):
-    if pset_settings := ifc_el.get_pset(project, pset_settings_name):
-        pset_settings = ifc_file.by_id(pset_settings["id"])
-        ifc_api.run("pset.remove_pset", ifc_file, product=project, pset=pset_settings)
-        self.report({'INFO'}, f"Cleared settings from IFCProject element")
-        return {'FINISHED'}
-    else:
-        self.report({'WARNING'}, "No settings found")
-        return {'CANCELLED'}
+    @staticmethod
+    def clear_settings(operator, props):
+        if pset_settings := ifc_el.get_pset(project, pset_settings_name):
+            pset_settings = ifc_file.by_id(pset_settings["id"])
+            ifc_api.run("pset.remove_pset", ifc_file, product=project, pset=pset_settings)
+            operator.report({'INFO'}, f"Cleared settings from IFCProject element")
+            return {'FINISHED'}
+        else:
+            operator.report({'WARNING'}, "No settings found")
+            return {'CANCELLED'}
 
 class IFC_SaveSettings(bpy.types.Operator):
     bl_idname = "ifc.save_settings"
@@ -867,7 +913,7 @@ class IFC_SaveSettings(bpy.types.Operator):
 
     def execute(self, context):
         props = context.scene.ifc_numbering_settings
-        return save_settings(self, props)
+        return Settings.save_settings(self, props)
     
 class IFC_LoadSettings(bpy.types.Operator):
     bl_idname = "ifc.load_settings"
@@ -876,7 +922,7 @@ class IFC_LoadSettings(bpy.types.Operator):
 
     def execute(self, context):
         props = context.scene.ifc_numbering_settings
-        return load_settings(self, props)
+        return Settings.load_settings(self, props)
 
 class IFC_DeleteSettings(bpy.types.Operator):
     bl_idname = "ifc.delete_settings"
@@ -885,7 +931,7 @@ class IFC_DeleteSettings(bpy.types.Operator):
 
     def execute(self, context):
         props = context.scene.ifc_numbering_settings
-        return delete_settings(self, props)
+        return Settings.delete_settings(self, props)
 
 class IFC_ClearSettings(bpy.types.Operator):
     bl_idname = "ifc.clear_settings"
@@ -894,7 +940,7 @@ class IFC_ClearSettings(bpy.types.Operator):
 
     def execute(self, context):
         props = context.scene.ifc_numbering_settings
-        return clear_settings(self, props)
+        return Settings.clear_settings(self, props)
 
 class IFC_ExportSettings(bpy.types.Operator):
     bl_idname = "ifc.export_settings"
@@ -905,7 +951,7 @@ class IFC_ExportSettings(bpy.types.Operator):
     def execute(self, context):
         props = context.scene.ifc_numbering_settings
         with open(self.filepath, 'w') as f:
-            json.dump(settings_dict(props), f)
+            json.dump(Settings.settings_dict(props), f)
         self.report({'INFO'}, f"Exported settings to {self.filepath}")
         return {'FINISHED'}
 
@@ -925,7 +971,7 @@ class IFC_ImportSettings(bpy.types.Operator):
         props = context.scene.ifc_numbering_settings
         with open(self.filepath, 'r') as f:
             settings = json.load(f)
-            read_settings(self, settings, props)
+            Settings.read_settings(self, settings, props)
         self.report({'INFO'}, f"Imported settings from {self.filepath}")
         return {'FINISHED'}
     
