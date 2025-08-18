@@ -566,6 +566,8 @@ def get_common_pset(element):
 def get_number(element):
     save_prop = bpy.context.scene.ifc_numbering_settings.save_prop
     number = None
+    if element is None:
+        return number
     if save_prop == "Tag" and hasattr(element, "Tag"):
         number = element.Tag
     if save_prop == "Pset_Numbering" and (pset := ifc_el.get_pset(element, pset_numbering_name)):
@@ -579,6 +581,8 @@ def get_number(element):
 def set_number(element, number):
     save_prop = bpy.context.scene.ifc_numbering_settings.save_prop
     count = 0
+    if element is None:
+        return count
     if save_prop == "Tag" and hasattr(element, "Tag"):
         count += element.Tag != number
         element.Tag = number
