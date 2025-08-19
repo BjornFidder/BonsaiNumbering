@@ -758,7 +758,6 @@ class IFC_AssignNumber(bpy.types.Operator):
             if element and old_number != ManageNumbering.get_number(element, props.save_prop):
                 ManageNumbering.set_number(element, old_number, props.save_prop)
                 rollback_count += 1
-        props.update_custom_storey(None)  # Reset custom storey number to avoid conflicts
         bpy.ops.ifc.show_message('EXEC_DEFAULT', message=f"Rollback {rollback_count} numbers.")
         return {'FINISHED'}
     
