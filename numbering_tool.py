@@ -192,9 +192,9 @@ class Storeys:
         for obj in bpy.context.scene.objects:
             element = tool.Ifc.get_entity(obj)
             if element is not None and element.is_a("IfcBuildingStorey"):
-                location = ObjectLocation.get_object_location(obj, props)
+                location = ObjectGeometry.get_object_location(obj, props)
                 storeys.append((element, location))
-        storeys.sort(key=ft.cmp_to_key(lambda a, b: ObjectLocation.cmp_within_precision(a[1], b[1], props, use_dir=False)))
+        storeys.sort(key=ft.cmp_to_key(lambda a, b: ObjectGeometry.cmp_within_precision(a[1], b[1], props, use_dir=False)))
         storeys = [storey[0] for storey in storeys]  # Extract only the IfcBuildingStorey entities
         return storeys
 
@@ -711,7 +711,7 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         row = layout.row(align=True)
         row.operator("ifc.remove_numbers", icon="X", text="Remove numbers")
 
-class ObjectLocation:
+class ObjectGeometry:
     @staticmethod
     def get_object_location(obj, props):
         """Get the location of a Blender object."""
@@ -836,8 +836,8 @@ class IFC_AssignNumbers(bpy.types.Operator):
             if element is None:
                 continue
             if element.is_a() in selected_types:
-                location = ObjectLocation.get_object_location(obj, props)
-                dimensions = ObjectLocation.get_object_dimensions(obj)
+                location = ObjectGeometry.get_object_location(obj, props)
+                dimensions = ObjectGeometry.get_object_dimensions(obj)
                 elements.append((element, location, dimensions))
             elif props.remove_toggle and element.is_a() in possible_types:
                 remove_count += SaveNumber.remove_number(element, props, numbers_cache)
@@ -846,9 +846,9 @@ class IFC_AssignNumbers(bpy.types.Operator):
             self.report({'WARNING'}, f"No elements selected or available for numbering, removed {remove_count} existing numbers.")
             return {'CANCELLED'}
 
-        elements.sort(key=ft.cmp_to_key(lambda a, b: ObjectLocation.cmp_within_precision(a[2], b[2], props, use_dir=False)))
+        elements.sort(key=ft.cmp_to_key(lambda a, b: ObjectGeometry.cmp_within_precision(a[2], b[2], props, use_dir=False)))
 
-        elements.sort(key=ft.cmp_to_key(lambda a, b: ObjectLocation.cmp_within_precision(a[1], b[1], props)))
+        elements.sort(key=ft.cmp_to_key(lambda a, b: ObjectGeometry.cmp_within_precision(a[1], b[1], props)))
 
         storeys = Storeys.get_storeys(props)
 
