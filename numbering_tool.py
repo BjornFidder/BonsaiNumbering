@@ -115,11 +115,12 @@ class SaveNumber:
 
 class LoadSelection:
 
-    objects = []
+    all_objects = []
+    selected_objects = []
     possible_types = []
     
     @staticmethod
-    def load_objects(props):
+    def load_selected_objects(props):
         """Load the selected objects based on the current context."""
         objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
         if props.visible_toggle:
@@ -166,9 +167,11 @@ class LoadSelection:
     def get_possible_types(prop, context):
         """Return the list of available types for selection."""
         props = context.scene.ifc_numbering_settings
-        objects = LoadSelection.load_objects(props)
-        if objects != LoadSelection.objects:
-            LoadSelection.objects = objects
+        all_objects = list(bpy.context.scene.objects)
+        objects = LoadSelection.load_selected_objects(props)
+        if all_objects != LoadSelection.all_objects or objects != LoadSelection.selected_objects:
+            LoadSelection.all_objects = all_objects
+            LoadSelection.selected_objects = objects
             ifc_types, number_counts = LoadSelection.load_possible_types(objects)
             LoadSelection.possible_types = [(id, name + f": {number_counts[id]}", "") for (id, name, _) in ifc_types]
             NumberFormatting.update_format_preview(prop, context)
@@ -818,7 +821,7 @@ class IFC_AssignNumbers(bpy.types.Operator):
                     if element is not None and element.is_a("IfcElement"):
                         remove_count += SaveNumber.remove_number(element, props, numbers_cache)
 
-        objects = LoadSelection.load_objects(props)
+        objects = LoadSelection.load_selected_objects(props)
 
         if not objects:
             self.report({'WARNING'}, f"No objects selected or available for numbering, removed {remove_count} existing numbers.")
