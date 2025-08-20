@@ -147,7 +147,7 @@ class LoadSelection:
 
         for obj in objects:
             element = tool.Ifc.get_entity(obj)
-            if not (element and element.is_a("IfcElement")):
+            if element is None or not element.is_a("IfcElement"):
                 continue
             ifc_type = element.is_a() #Starts with "Ifc", which we can strip by starting from index 3 
         
@@ -875,7 +875,7 @@ class IFC_AssignNumbers(bpy.types.Operator):
             numbers = []
             for obj in bpy.context.scene.objects:
                 element = tool.Ifc.get_entity(obj)
-                if not element.is_a("IfcElement"):
+                if element is None or not element.is_a("IfcElement"):
                     continue
                 number = SaveNumber.get_number(element, props, numbers_cache)
                 if number in numbers:
