@@ -709,7 +709,6 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         row = layout.row(align=True)
         row.operator("ifc.remove_numbers", icon="X", text="Remove numbers")
 
-
 class ObjectLocation:
     @staticmethod
     def get_object_location(obj, props):
@@ -757,7 +756,7 @@ class ObjectLocation:
                 return 1 if diff > 0 else -1
         return 0
 
-class UndoSupport:
+class UndoOperator:
     @staticmethod
     def execute_with_undo(operator, context, method):
         """Execute a method with undo support."""
@@ -775,6 +774,7 @@ class UndoSupport:
         IfcStore.end_transaction(operator)
         end = time.time()
         print(f"Execution time: {end - start:.4f} seconds")
+        bpy.context.view_layer.objects.active = bpy.context.active_object
         return result
     
     @staticmethod
@@ -886,13 +886,13 @@ class IFC_AssignNumbers(bpy.types.Operator):
         return {'FINISHED'}
 
     def execute(self, context):
-        return UndoSupport.execute_with_undo(self, context, self.assign_numbers)
+        return UndoOperator.execute_with_undo(self, context, self.assign_numbers)
 
     def rollback(self, data):
-        UndoSupport.rollback(self, data)
+        UndoOperator.rollback(self, data)
     
     def commit(self, data):
-        UndoSupport.commit(self, data)
+        UndoOperator.commit(self, data)
 
 class IFC_RemoveNumbers(bpy.types.Operator):
     bl_idname = "ifc.remove_numbers"
@@ -926,13 +926,13 @@ class IFC_RemoveNumbers(bpy.types.Operator):
         return {'FINISHED'}
         
     def execute(self, context):
-        return UndoSupport.execute_with_undo(self, context, self.remove_numbers)
+        return UndoOperator.execute_with_undo(self, context, self.remove_numbers)
 
     def rollback(self, data):
-        UndoSupport.rollback(self, data)
+        UndoOperator.rollback(self, data)
     
     def commit(self, data):
-        UndoSupport.commit(self, data)
+        UndoOperator.commit(self, data)
 
 class IFC_ShowMessage(bpy.types.Operator):
     bl_idname = "ifc.show_message"
