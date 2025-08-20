@@ -9,7 +9,6 @@ import ifcopenshell.api as ifc_api
 from ifcopenshell.util.element import get_pset
 from ifcopenshell.util.pset import PsetQto
 import json
-import time 
 
 class IFC:
     def __init__(self):
