@@ -121,7 +121,7 @@ class LoadSelection:
     @staticmethod
     def get_selected_types(props):
         """Get the selected IFC types from the properties, processing if All types are selected"""
-        selected_types = props.selected_types
+        selected_types = list(props.selected_types)
         if "IfcElement" in selected_types:
             selected_types = [type_tuple[0] for type_tuple in LoadSelection.possible_types[1:]]
         return selected_types
@@ -819,10 +819,8 @@ class IFC_AssignNumbers(bpy.types.Operator):
             self.report({'WARNING'}, f"No objects selected or available for numbering, removed {remove_count} existing numbers.")
             return {'CANCELLED'}
         
-        selected_types = props.selected_types
+        selected_types = LoadSelection.get_selected_types(props)
         possible_types = [tupl[0] for tupl in LoadSelection.possible_types]
-        if "IfcElement" in selected_types:
-            selected_types = possible_types
         
         elements = []
         for obj in objects: 
@@ -847,7 +845,7 @@ class IFC_AssignNumbers(bpy.types.Operator):
         storeys = Storeys.get_storeys(props)
 
         elements_by_type = [[element for (element, _, _) in elements if element.is_a() == ifc_type] for ifc_type in selected_types]
-
+        
         for (element_number, (element, _, _)) in enumerate(elements):
 
             type_index = selected_types.index(element.is_a())
