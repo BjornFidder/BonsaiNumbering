@@ -14,7 +14,7 @@ See the Demo video for a quick overview of the features.
 - Integrates with Bonsai for IFC data access and editing.
 
 ## Usage
-The tool is a single Python script file. When this Python file is run in Blender, it loads the Numbering Tool in the UI sidebar of the 3D viewport. Assign, format, and manage numbers for IFC elements, and save/load settings as needed.
+The tool is currently packaged as a single Python script file. When this Python file is run in Blender, it loads the Numbering Tool in the UI sidebar of the 3D viewport. Assign, format, and manage numbers for IFC elements, and save/load settings as needed.
 
 ## License
 
