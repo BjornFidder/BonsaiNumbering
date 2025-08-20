@@ -189,13 +189,13 @@ class Storeys:
     @staticmethod
     def get_storeys(props):
         storeys = []
+        storey_locations = {}
         for obj in bpy.context.scene.objects:
             element = tool.Ifc.get_entity(obj)
             if element is not None and element.is_a("IfcBuildingStorey"):
-                location = ObjectGeometry.get_object_location(obj, props)
-                storeys.append((element, location))
-        storeys.sort(key=ft.cmp_to_key(lambda a, b: ObjectGeometry.cmp_within_precision(a[1], b[1], props, use_dir=False)))
-        storeys = [storey[0] for storey in storeys]  # Extract only the IfcBuildingStorey entities
+                storeys.append(element)
+                storey_locations[element] = ObjectGeometry.get_object_location(obj, props)
+        storeys.sort(key=ft.cmp_to_key(lambda a, b: ObjectGeometry.cmp_within_precision(storey_locations[a], storey_locations[b], props, use_dir=False)))
         return storeys
 
     @staticmethod
@@ -830,31 +830,32 @@ class IFC_AssignNumbers(bpy.types.Operator):
         selected_types = LoadSelection.get_selected_types(props)
         possible_types = [tupl[0] for tupl in LoadSelection.possible_types]
         
-        elements = []
+        selected_elements = []
+        elements_locations = {}
+        elements_geometries = {}
         for obj in objects: 
             element = tool.Ifc.get_entity(obj)
             if element is None:
                 continue
             if element.is_a() in selected_types:
-                location = ObjectGeometry.get_object_location(obj, props)
-                dimensions = ObjectGeometry.get_object_dimensions(obj)
-                elements.append((element, location, dimensions))
+                selected_elements.append(element)
+                elements_locations[element] = ObjectGeometry.get_object_location(obj, props)
+                elements_geometries[element] = ObjectGeometry.get_object_dimensions(obj)
             elif props.remove_toggle and element.is_a() in possible_types:
                 remove_count += SaveNumber.remove_number(element, props, numbers_cache)
 
-        if not elements:
+        if not selected_elements:
             self.report({'WARNING'}, f"No elements selected or available for numbering, removed {remove_count} existing numbers.")
             return {'CANCELLED'}
 
-        elements.sort(key=ft.cmp_to_key(lambda a, b: ObjectGeometry.cmp_within_precision(a[2], b[2], props, use_dir=False)))
-
-        elements.sort(key=ft.cmp_to_key(lambda a, b: ObjectGeometry.cmp_within_precision(a[1], b[1], props)))
+        selected_elements.sort(key=ft.cmp_to_key(lambda a, b: ObjectGeometry.cmp_within_precision(elements_geometries[a], elements_geometries[b], props, use_dir=False)))
+        selected_elements.sort(key=ft.cmp_to_key(lambda a, b: ObjectGeometry.cmp_within_precision(elements_locations[a], elements_locations[b], props)))
 
         storeys = Storeys.get_storeys(props)
 
-        elements_by_type = [[element for (element, _, _) in elements if element.is_a() == ifc_type] for ifc_type in selected_types]
-        
-        for (element_number, (element, _, _)) in enumerate(elements):
+        elements_by_type = [[element for element in selected_elements if element.is_a() == ifc_type] for ifc_type in selected_types]
+
+        for (element_number, element) in enumerate(selected_elements):
 
             type_index = selected_types.index(element.is_a())
             type_elements = elements_by_type[type_index]
