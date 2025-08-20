@@ -31,9 +31,13 @@ class SaveNumber:
     pset_common_names = {}
     
     @staticmethod
-    def get_number(element, props):
+    def get_number(element, props, numbers_cache=None):
         if element is None:
             return None
+        if numbers_cache is None:
+            numbers_cache = {}
+        if element.GlobalId in numbers_cache:
+            return numbers_cache[element.GlobalId]
         if props.save_type == "Attribute" and hasattr(element, props.attribute_name):
             return getattr(element, props.attribute_name)
         if props.save_type == "Pset":
@@ -43,32 +47,37 @@ class SaveNumber:
         return None
 
     @staticmethod
-    def save_number(element, number, props):
+    def save_number(element, number, props, numbers_cache=None):
         if element is None:
             return 0
+        if numbers_cache is None:
+            numbers_cache = {}
+        if number == SaveNumber.get_number(element, props, numbers_cache):
+            return 0
         if props.save_type == "Attribute" and hasattr(element, props.attribute_name):
-            count = getattr(element, props.attribute_name) != number
             if props.attribute_name == "Name" and number is None:
                 number = element.is_a().strip("Ifc") #Reset Name to name of type
             setattr(element, props.attribute_name, number)
-            return count
+            numbers_cache[element.GlobalId] = number
+            return 1
         if props.save_type == "Pset":
             pset_name = SaveNumber.get_pset_name(element, props)
+            if not pset_name:
+                return 0
             if pset := get_pset(element, pset_name):
-                count = pset.get(props.property_name) != number
                 pset = ifc.file.by_id(pset["id"])  
             else:
-                count = number is not None
                 pset = ifc_api.run("pset.add_pset", ifc.file, product=element, name=pset_name)
             ifc_api.run("pset.edit_pset", ifc.file, pset=pset, properties={props.property_name: number}, should_purge=True)
             if number is None and not pset.HasProperties:
                 ifc_api.run("pset.remove_pset", ifc.file, product=element, pset=pset)
-            return count
+            numbers_cache[element.GlobalId] = number
+            return 1
 
     @staticmethod
-    def remove_number(element, props):
-        return SaveNumber.save_number(element, None, props)
-        
+    def remove_number(element, props, numbers_cache=None):
+        return SaveNumber.save_number(element, None, props, numbers_cache)
+
     @staticmethod
     def get_pset_name(element, props):
         if props.pset_name == "Common":
@@ -758,10 +767,10 @@ class UndoSupport:
         elements = ifc.file.by_type("IfcElement")
         if props.pset_name == "Common":
             SaveNumber.get_pset_common_names(elements)
-        old_value = {element.GlobalId: SaveNumber.get_number(element, props) for element in elements}
-        result = method(props)
-        new_value = {element.GlobalId: SaveNumber.get_number(element, props) for element in elements}
-        operator.transaction_data = {"old_value": old_value, "new_value": new_value}
+        old_numbers = {element.GlobalId: SaveNumber.get_number(element, props) for element in elements}
+        new_numbers = old_numbers.copy()
+        result = method(props, new_numbers)
+        operator.transaction_data = {"old_value": old_numbers, "new_value": new_numbers}
         IfcStore.add_transaction_operation(operator)
         IfcStore.end_transaction(operator)
         end = time.time()
@@ -775,7 +784,7 @@ class UndoSupport:
         props = bpy.context.scene.ifc_numbering_settings
         for element in ifc.file.by_type("IfcElement"):
             old_number = data["old_value"].get(element.GlobalId, None)
-            if old_number != SaveNumber.get_number(element, props):
+            if old_number != SaveNumber.get_number(element, props, data["new_value"]):
                 SaveNumber.save_number(element, old_number, props)
                 rollback_count += 1
         bpy.ops.ifc.show_message('EXEC_DEFAULT', message=f"Rollback {rollback_count} numbers.")
@@ -789,7 +798,7 @@ class UndoSupport:
             element = tool.Ifc.get_entity(obj)
             if element is not None and element.is_a("IfcElement"):
                 new_number = data["new_value"].get(obj.name, None)
-                if new_number != SaveNumber.get_number(element, props):
+                if new_number != SaveNumber.get_number(element, props, data["old_value"]):
                     SaveNumber.save_number(element, new_number, props)
                     commit_count += 1
         bpy.ops.ifc.show_message('EXEC_DEFAULT', message=f"Commit {commit_count} numbers.")
@@ -800,7 +809,7 @@ class IFC_AssignNumbers(bpy.types.Operator):
     bl_description = "Assign numbers to selected objects"
     bl_options = {"REGISTER", "UNDO"}
 
-    def assign_numbers(self, props):
+    def assign_numbers(self, props, numbers_cache):
         """Assign numbers to selected objects based on their IFC type and location."""
         number_count = 0
         remove_count = 0
@@ -811,7 +820,7 @@ class IFC_AssignNumbers(bpy.types.Operator):
                 (props.visible_toggle and not obj.visible_get()):
                     element = tool.Ifc.get_entity(obj)
                     if element is not None and element.is_a("IfcElement"):
-                        remove_count += SaveNumber.remove_number(element, props)
+                        remove_count += SaveNumber.remove_number(element, props, numbers_cache)
 
         objects = LoadSelection.load_objects(props)
 
@@ -832,7 +841,7 @@ class IFC_AssignNumbers(bpy.types.Operator):
                 dimensions = ObjectLocation.get_object_dimensions(obj)
                 elements.append((element, location, dimensions))
             elif props.remove_toggle and element.is_a() in possible_types:
-                remove_count += SaveNumber.remove_number(element, props)
+                remove_count += SaveNumber.remove_number(element, props, numbers_cache)
 
         if not elements:
             self.report({'WARNING'}, f"No elements selected or available for numbering, removed {remove_count} existing numbers.")
@@ -858,8 +867,7 @@ class IFC_AssignNumbers(bpy.types.Operator):
                 self.report({'WARNING'}, f"Element {element.Name} with ID {element.GlobalId} is not contained in any storey.")
 
             number = NumberFormatting.format_number(props, (element_number, type_number, storey_number), (len(objects), len(type_elements), len(storeys)), type_name)
-            number_count += SaveNumber.save_number(element, number, props)
-
+            number_count += SaveNumber.save_number(element, number, props, numbers_cache)
         self.report({'INFO'}, f"Renumbered {number_count} objects, removed number from {remove_count} objects.")
 
         if props.check_duplicates_toggle:
@@ -867,9 +875,9 @@ class IFC_AssignNumbers(bpy.types.Operator):
             numbers = []
             for obj in bpy.context.scene.objects:
                 element = tool.Ifc.get_entity(obj)
-                number = SaveNumber.get_number(element, props)
                 if not element.is_a("IfcElement"):
                     continue
+                number = SaveNumber.get_number(element, props, numbers_cache)
                 if number in numbers:
                     self.report({'WARNING'}, f"The model contains duplicate numbers")
                     break
@@ -892,7 +900,7 @@ class IFC_RemoveNumbers(bpy.types.Operator):
     bl_description = "Remove numbers from selected objects, from the selected attribute or Pset"
     bl_options = {"REGISTER", "UNDO"}
 
-    def remove_numbers(self, props):
+    def remove_numbers(self, props, numbers_cache):
         """Remove numbers from selected objects"""
         remove_count = 0
 
@@ -907,7 +915,8 @@ class IFC_RemoveNumbers(bpy.types.Operator):
         for obj in objects:
             element = tool.Ifc.get_entity(obj)
             if element is not None and element.is_a("IfcElement"):
-                remove_count += SaveNumber.remove_number(element, props)
+                remove_count += SaveNumber.remove_number(element, props, numbers_cache)
+                numbers_cache[element.GlobalId] = None
 
         if remove_count == 0:
             self.report({'WARNING'}, f"No elements selected or available for removal.")
