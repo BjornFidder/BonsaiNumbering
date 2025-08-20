@@ -759,7 +759,6 @@ class UndoOperator:
     @staticmethod
     def execute_with_undo(operator, context, method):
         """Execute a method with undo support."""
-        start = time.time()
         IfcStore.begin_transaction(operator)
         props = context.scene.ifc_numbering_settings
         elements = ifc.file.by_type("IfcElement")
@@ -771,8 +770,6 @@ class UndoOperator:
         operator.transaction_data = {"old_value": old_numbers, "new_value": new_numbers}
         IfcStore.add_transaction_operation(operator)
         IfcStore.end_transaction(operator)
-        end = time.time()
-        print(f"Execution time: {end - start:.4f} seconds")
         bpy.context.view_layer.objects.active = bpy.context.active_object
         return result
     
