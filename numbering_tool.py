@@ -10,6 +10,9 @@ from ifcopenshell.util.element import get_pset
 from ifcopenshell.util.pset import PsetQto
 import json
 
+def get_id(element):
+    return getattr(element, "GlobalId", None) or getattr(element, "STEP ID", None)
+
 class IFC:
     def __init__(self):
         self.file = None
@@ -35,34 +38,37 @@ class SaveNumber:
             return None
         if numbers_cache is None:
             numbers_cache = {}
-        if element.GlobalId in numbers_cache:
-            return numbers_cache[element.GlobalId]
-        if props.save_type == "Attribute" and hasattr(element, props.attribute_name):
-            return getattr(element, props.attribute_name)
+        if get_id(element) in numbers_cache:
+            return numbers_cache[get_id(element)]
+        if props.save_type == "Attribute":
+            return getattr(element, SaveNumber.get_attribute_name(props), None)
         if props.save_type == "Pset":
             pset_name = SaveNumber.get_pset_name(element, props)
             if (pset := get_pset(element, pset_name)):
                 return pset.get(props.property_name)
-        return None
+            return None
 
     @staticmethod
     def save_number(element, number, props, numbers_cache=None):
         if element is None:
-            return 0
+            return None
         if numbers_cache is None:
             numbers_cache = {}
         if number == SaveNumber.get_number(element, props, numbers_cache):
             return 0
-        if props.save_type == "Attribute" and hasattr(element, props.attribute_name):
-            if props.attribute_name == "Name" and number is None:
+        if props.save_type == "Attribute":
+            attribute_name = SaveNumber.get_attribute_name(props)
+            if not hasattr(element, attribute_name):
+                return None
+            if attribute_name == "Name" and number is None:
                 number = element.is_a().strip("Ifc") #Reset Name to name of type
-            setattr(element, props.attribute_name, number)
-            numbers_cache[element.GlobalId] = number
+            setattr(element, attribute_name, number)
+            numbers_cache[get_id(element)] = number
             return 1
         if props.save_type == "Pset":
             pset_name = SaveNumber.get_pset_name(element, props)
             if not pset_name:
-                return 0
+                return None
             if pset := get_pset(element, pset_name):
                 pset = ifc.file.by_id(pset["id"])  
             else:
@@ -70,12 +76,18 @@ class SaveNumber:
             ifc_api.run("pset.edit_pset", ifc.file, pset=pset, properties={props.property_name: number}, should_purge=True)
             if number is None and not pset.HasProperties:
                 ifc_api.run("pset.remove_pset", ifc.file, product=element, pset=pset)
-            numbers_cache[element.GlobalId] = number
+            numbers_cache[get_id(element)] = number
             return 1
 
     @staticmethod
     def remove_number(element, props, numbers_cache=None):
-        return SaveNumber.save_number(element, None, props, numbers_cache)
+        count = SaveNumber.save_number(element, None, props, numbers_cache)
+        return int(count or 0)
+
+    def get_attribute_name(props):
+        if props.attribute_name == "Other":
+            return props.other_attribute_name
+        return props.attribute_name
 
     @staticmethod
     def get_pset_name(element, props):
@@ -120,6 +132,13 @@ class LoadSelection:
     possible_types = []
     
     @staticmethod
+    def get_parent_type(props):
+        """Get the parent type from the properties."""
+        if props.parent_type == "Other":
+            return props.parent_type_other
+        return props.parent_type
+
+    @staticmethod
     def load_selected_objects(props):
         """Load the selected objects based on the current context."""
         objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
@@ -131,23 +150,23 @@ class LoadSelection:
     def get_selected_types(props):
         """Get the selected IFC types from the properties, processing if All types are selected"""
         selected_types = list(props.selected_types)
-        if "IfcElement" in selected_types:
+        if "All" in selected_types:
             selected_types = [type_tuple[0] for type_tuple in LoadSelection.possible_types[1:]]
         return selected_types
     
     @staticmethod
-    def load_possible_types(objects):
-        """Load the available IFC types from the selected objects."""
+    def load_possible_types(objects, parent_type):
+        """Load the available IFC types from the selected elements."""
         if not objects:
-            return [("IfcElement", "All", "element")], {"IfcElement": 0}
+            return [("All", "All", "element")], {"All": 0}
         
-        ifc_types = [("IfcElement", "All", "element")]
+        ifc_types = [("All", "All", "element")]
         seen_types = []
-        number_counts = {"IfcElement": 0}
+        number_counts = {"All": 0}
 
         for obj in objects:
             element = tool.Ifc.get_entity(obj)
-            if element is None or not element.is_a("IfcElement"):
+            if element is None or not element.is_a(parent_type):
                 continue
             ifc_type = element.is_a() #Starts with "Ifc", which we can strip by starting from index 3 
         
@@ -156,12 +175,21 @@ class LoadSelection:
                 ifc_types.append((ifc_type, ifc_type[3:], ifc_type[3:].lower())) # Store type as (id, name, name_lower)
                 number_counts[ifc_type] = 0
 
-            number_counts["IfcElement"] += 1
+            number_counts["All"] += 1
             number_counts[ifc_type] += 1
                 
-        ifc_types.sort(key=lambda ifc_type: ifc_type[0] if ifc_type[0] != "IfcElement" else "") #Sort types alphabetically, but keeping IfcElement at index 0
+        ifc_types.sort(key=lambda ifc_type: ifc_type[0]) 
         
         return ifc_types, number_counts
+
+    @staticmethod
+    def update_possible_types(prop, context):
+        props = context.scene.ifc_numbering_settings
+        ifc_types, number_counts = LoadSelection.load_possible_types(LoadSelection.selected_objects, LoadSelection.get_parent_type(props))
+        LoadSelection.possible_types = [(id, name + f": {number_counts[id]}", "") for (id, name, _) in ifc_types]
+        NumberFormatting.update_format_preview(prop, context)
+        SaveNumber.update_pset_names(prop, context)
+        ifc.update()
 
     @staticmethod
     def get_possible_types(prop, context):
@@ -172,12 +200,7 @@ class LoadSelection:
         if all_objects != LoadSelection.all_objects or objects != LoadSelection.selected_objects:
             LoadSelection.all_objects = all_objects
             LoadSelection.selected_objects = objects
-            ifc_types, number_counts = LoadSelection.load_possible_types(objects)
-            LoadSelection.possible_types = [(id, name + f": {number_counts[id]}", "") for (id, name, _) in ifc_types]
-            NumberFormatting.update_format_preview(prop, context)
-            SaveNumber.update_pset_names(prop, context)
-            global ifc
-            ifc.update()
+            LoadSelection.update_possible_types(prop, context)
         return LoadSelection.possible_types
 
 class Storeys:
@@ -188,6 +211,7 @@ class Storeys:
 
     @staticmethod
     def get_storeys(props):
+        """Get all storeys from the current scene."""
         storeys = []
         storey_locations = {}
         for obj in bpy.context.scene.objects:
@@ -225,8 +249,8 @@ class Storeys:
     @staticmethod
     def get_storey_number(element, storeys, props):
         storey_number = None
-        if structure := element.ContainedInStructure:
-            storey = structure[0].RelatingStructure
+        if structure := getattr(element, "ContainedInStructure", None):
+            storey = getattr(structure[0], "RelatingStructure", None)
             if storey and props.storey_numbering == "custom":
                 storey_number = SaveNumber.get_number(storey, Storeys)
                 if storey_number is not None:
@@ -268,8 +292,8 @@ class NumberFormatting:
             return "Type"
         #Get the type name of the selected type, excluding 'IfcElement'
         types = props.selected_types
-        if 'IfcElement' in types:
-            types.remove('IfcElement')
+        if 'All' in types:
+            types.remove('All')
         if len(types)>0:
             return str(list(types)[0][3:])
         #If all selected, return type name of one of the selected types
@@ -290,10 +314,10 @@ class NumberFormatting:
                 return max_element, max_type, max_storey
             type_counts = {type_tuple[0]: int(''.join([c for c in type_tuple[1] if c.isdigit()])) \
                            for type_tuple in LoadSelection.possible_types}
-            if "IfcElement" in props.selected_types:
-                max_element = type_counts.get("IfcElement", 0) 
+            if "All" in props.selected_types:
+                max_element = type_counts.get("All", 0) 
             else:
-                max_element = sum(type_counts.get(t, 0) for t in props.selected_types)
+                max_element = sum(type_counts.get(t, 0) for t in LoadSelection.get_selected_types(props))
             max_type = type_counts.get('Ifc' + type_name, max_element)
         return max_element, max_type, max_storey
 
@@ -397,6 +421,27 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         description="Only number visible objects",
         default=False,
         update=NumberFormatting.update_format_preview
+    ) # pyright: ignore[reportInvalidTypeForm]
+    
+    parent_type: bpy.props.EnumProperty(
+        name="Parent Type",
+        description="Select the parent type for numbering",
+        items=[
+            ("IfcElement", "IfcElement", "Number IFC elements"),
+            ("IfcProduct", "IfcProduct", "Number IFC products"),
+            ("IfcObject", "IfcObject", "Number IFC objects"),
+            ("IfcGridAxis", "IfcGridAxis", "Number IFC grid axes"),
+            ("Other", "Other", "Input which IFC entities to number")
+        ],
+        default="IfcElement",
+        update = LoadSelection.update_possible_types
+    ) # pyright: ignore[reportInvalidTypeForm]
+
+    parent_type_other : bpy.props.StringProperty(
+        name="Other Parent Type",
+        description="Input which IFC entities to number",
+        default="IfcElement",
+        update = LoadSelection.update_possible_types
     ) # pyright: ignore[reportInvalidTypeForm]
 
     def update_selected_types(self, context):
@@ -546,7 +591,7 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         name="Format",
         description="Format string for selected IFC type.\n" \
         "{E}: element number \n" \
-        "{T}: number within type, \n" \
+        "{T}: number within type \n" \
         "{S}: number of storey\n" \
         "[T]: first letter of type name\n" \
         "[TT] : all capitalized letters in type name\n" \
@@ -569,11 +614,18 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         description="Name of the attribute to store the number",
         items = [("Tag", "Tag", "Store number in IFC Tag attribute"),
                  ("Name", "Name", "Store number in IFC Name attribute"),
-                 ("Description", "Description", "Store number in IFC Description attribute")
+                 ("Description", "Description", "Store number in IFC Description attribute"),
+                 ("Other", "Other", "Input in which IFC attribute to store the number")
                 ],
         default="Tag"
     ) # pyright: ignore[reportInvalidTypeForm]
-    
+
+    other_attribute_name : bpy.props.StringProperty(
+        name="Other attribute name",
+        description="Name of the other attribute to store the number",
+        default="Tag"
+    ) # pyright: ignore[reportInvalidTypeForm]
+
     def get_pset_names(self, context):
         return SaveNumber.pset_names
     
@@ -627,13 +679,17 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         # Selection box
         box = layout.box()
         box.label(text="Elements to number:")
-        row = box.row(align=False)
-        row.alignment = "LEFT"
-        row.prop(self, "selected_toggle")
-        row.prop(self, "visible_toggle")
+        grid = box.grid_flow(row_major=True, align=False, columns=4, even_columns=True)
+        grid.prop(self, "selected_toggle")
+        grid.prop(self, "visible_toggle")
+        grid.prop(self, "parent_type", text="")
+        if self.parent_type == "Other":
+            grid.prop(self, "parent_type_other", text="")
+        else:
+            grid.label(text="")
 
-        rows = box.grid_flow(row_major=True, align=True, columns=4)
-        rows.prop(self, "selected_types", expand=True)
+        grid = box.grid_flow(row_major=True, align=True, columns=4, even_columns=True)
+        grid.prop(self, "selected_types", expand=True)
 
         # Numbering order box
         box = layout.box()
@@ -695,6 +751,8 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         grid.prop(self, "save_type", text="")
         if self.save_type == "Attribute":
             grid.prop(self, "attribute_name", text="")
+            if self.attribute_name == "Other":
+                grid.prop(self, "other_attribute_name", text="")
         if self.save_type == "Pset":
             grid.prop(self, "pset_name", text="")
             if self.pset_name == "Custom Pset":
@@ -764,10 +822,10 @@ class UndoOperator:
         """Execute a method with undo support."""
         IfcStore.begin_transaction(operator)
         props = context.scene.ifc_numbering_settings
-        elements = ifc.file.by_type("IfcElement")
+        elements = ifc.file.by_type(LoadSelection.get_parent_type(props))
         if props.pset_name == "Common":
             SaveNumber.get_pset_common_names(elements)
-        old_numbers = {element.GlobalId: SaveNumber.get_number(element, props) for element in elements}
+        old_numbers = {get_id(element): SaveNumber.get_number(element, props) for element in elements}
         new_numbers = old_numbers.copy()
         result = method(props, new_numbers)
         operator.transaction_data = {"old_value": old_numbers, "new_value": new_numbers}
@@ -781,11 +839,9 @@ class UndoOperator:
         """Support undo of number assignment"""
         rollback_count = 0
         props = bpy.context.scene.ifc_numbering_settings
-        for element in ifc.file.by_type("IfcElement"):
-            old_number = data["old_value"].get(element.GlobalId, None)
-            if old_number != SaveNumber.get_number(element, props, data["new_value"]):
-                SaveNumber.save_number(element, old_number, props)
-                rollback_count += 1
+        for element in ifc.file.by_type(LoadSelection.get_parent_type(props)):
+            old_number = data["old_value"].get(get_id(element), None)
+            rollback_count += int(SaveNumber.save_number(element, old_number, props, data["new_value"]) or 0)
         bpy.ops.ifc.show_message('EXEC_DEFAULT', message=f"Rollback {rollback_count} numbers.")
     
     @staticmethod
@@ -795,11 +851,9 @@ class UndoOperator:
         props = bpy.context.scene.ifc_numbering_settings
         for obj in bpy.context.scene.objects:
             element = tool.Ifc.get_entity(obj)
-            if element is not None and element.is_a("IfcElement"):
+            if element is not None and element.is_a(LoadSelection.get_parent_type(props)):
                 new_number = data["new_value"].get(obj.name, None)
-                if new_number != SaveNumber.get_number(element, props, data["old_value"]):
-                    SaveNumber.save_number(element, new_number, props)
-                    commit_count += 1
+                commit_count += int(SaveNumber.save_number(element, new_number, props, data["old_value"]) or 0)
         bpy.ops.ifc.show_message('EXEC_DEFAULT', message=f"Commit {commit_count} numbers.")
     
 class IFC_AssignNumbers(bpy.types.Operator):
@@ -818,8 +872,9 @@ class IFC_AssignNumbers(bpy.types.Operator):
                 if (props.selected_toggle and obj not in bpy.context.selected_objects) or \
                 (props.visible_toggle and not obj.visible_get()):
                     element = tool.Ifc.get_entity(obj)
-                    if element is not None and element.is_a("IfcElement"):
-                        remove_count += SaveNumber.remove_number(element, props, numbers_cache)
+                    if element is not None and element.is_a(LoadSelection.get_parent_type(props)):
+                        count_diff = SaveNumber.remove_number(element, props, numbers_cache)
+                        remove_count += count_diff
 
         objects = LoadSelection.load_selected_objects(props)
 
@@ -864,10 +919,14 @@ class IFC_AssignNumbers(bpy.types.Operator):
 
             storey_number = Storeys.get_storey_number(element, storeys, props)
             if storey_number is None and "{S}" in props.format:
-                self.report({'WARNING'}, f"Element {element.Name} with ID {element.GlobalId} is not contained in any storey.")
+                self.report({'WARNING'}, f"Element {getattr(element, 'Name', '')} of type {element.is_a()} with ID {get_id(element)} is not contained in any storey.")
 
             number = NumberFormatting.format_number(props, (element_number, type_number, storey_number), (len(objects), len(type_elements), len(storeys)), type_name)
-            number_count += SaveNumber.save_number(element, number, props, numbers_cache)
+            count = SaveNumber.save_number(element, number, props, numbers_cache)
+            if count is None:
+                self.report({'WARNING'}, f"Failed to save number for element {getattr(element, 'Name', '')} of type {element.is_a()} with ID {get_id(element)}.")
+            else:
+                number_count += count
         self.report({'INFO'}, f"Renumbered {number_count} objects, removed number from {remove_count} objects.")
 
         if props.check_duplicates_toggle:
@@ -875,7 +934,7 @@ class IFC_AssignNumbers(bpy.types.Operator):
             numbers = []
             for obj in bpy.context.scene.objects:
                 element = tool.Ifc.get_entity(obj)
-                if element is None or not element.is_a("IfcElement"):
+                if element is None or not element.is_a(LoadSelection.get_parent_type(props)):
                     continue
                 number = SaveNumber.get_number(element, props, numbers_cache)
                 if number in numbers:
@@ -914,9 +973,9 @@ class IFC_RemoveNumbers(bpy.types.Operator):
             
         for obj in objects:
             element = tool.Ifc.get_entity(obj)
-            if element is not None and element.is_a("IfcElement"):
+            if element is not None and element.is_a(LoadSelection.get_parent_type(props)):
                 remove_count += SaveNumber.remove_number(element, props, numbers_cache)
-                numbers_cache[element.GlobalId] = None
+                numbers_cache[get_id(element)] = None
 
         if remove_count == 0:
             self.report({'WARNING'}, f"No elements selected or available for removal.")
