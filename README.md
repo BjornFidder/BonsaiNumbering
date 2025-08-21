@@ -2,7 +2,7 @@
 BonsaiNumbering is a Blender add-on for generating and managing sequential numbering of IFC objects and elements in your Bonsai projects. The tool integrates with Blender and Bonsai, providing a user-friendly interface for assigning unique, consistent numbers and managing IFC data directly in the 3D viewport.
 
 ## Features
-See the Demo video for a quick overview of the features.
+See the [DEMO](Demo_BonsaiNumbering.mp4) video for a quick overview of the features.
 - Assign sequential numbers to selected IFC objects or elements in Blender.
 - Customizable numbering formats with support for element, type, and storey numbers.
 - Save and load multiple named numbering settings directly in the IFC project file, or export settings to a JSON file.
