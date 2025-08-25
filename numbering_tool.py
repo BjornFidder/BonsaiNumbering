@@ -917,7 +917,7 @@ class BonsaiAssignNumbers(bpy.types.Operator):
     bl_description = "Assign numbers to selected objects"
     bl_options = {"REGISTER", "UNDO"}
 
-    def number_elements(elements, ifc_file, settings, elements_locations = None, elements_dimensions = None, storeys = None, numbers_cache = {}, storeys_numbers={}, report=None):
+    def number_elements(elements, ifc_file, settings, elements_locations = None, elements_dimensions = None, storeys = None, numbers_cache = {}, storeys_numbers={}, report=None, remove_count=None):
         """Number elements in the IFC file with the provided settings. If element locations or dimensions are specified, these are used for sorting.
         Providing numbers_cache, a dictionary with element-> currently saved number, speeds up execution.
         If storeys_numbers is provided, as a dictionary storey->number, this is used for assigning storey numbers."""
@@ -973,7 +973,7 @@ class BonsaiAssignNumbers(bpy.types.Operator):
         if failed_types:
             report({'WARNING'}, f"Failed to renumber the following types: {failed_types}")
 
-        if settings.get("remove_toggle"):
+        if settings.get("remove_toggle") and remove_count is not None:
             report({'INFO'}, f"Renumbered {number_count} objects, removed number from {remove_count} objects.")
         else:
             report({'INFO'}, f"Renumbered {number_count} objects.")
@@ -1020,13 +1020,14 @@ class BonsaiAssignNumbers(bpy.types.Operator):
             self.report({'WARNING'}, f"No elements selected or available for numbering, removed {remove_count} existing numbers.")
 
         storeys = Storeys.get_storeys(settings)
-        res, number_count = BonsaiAssignNumbers.number_elements(selected_elements, 
-                                                                ifc_file, settings, 
-                                                                elements_locations, 
-                                                                elements_dimensions,  
-                                                                storeys, 
-                                                                numbers_cache,
-                                                                report = self.report)
+        res, _= BonsaiAssignNumbers.number_elements(selected_elements, 
+                                                    ifc_file, settings, 
+                                                    elements_locations, 
+                                                    elements_dimensions,  
+                                                    storeys, 
+                                                    numbers_cache,
+                                                    report = self.report,
+                                                    remove_count=remove_count)
 
         if settings.get("check_duplicates_toggle"):
             numbers = []
