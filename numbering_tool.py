@@ -2,12 +2,15 @@
 import bpy
 import bonsai.tool as tool
 from mathutils import Vector
+import numpy as np
 import functools as ft
 from bonsai.bim.ifc import IfcStore
 import string
 import ifcopenshell.api as ifc_api
 from ifcopenshell.util.element import get_pset
 from ifcopenshell.util.pset import PsetQto
+import ifcopenshell.geom as geom
+import ifcopenshell.util.shape as ifc_shape
 import json
 
 def get_id(element):
@@ -23,36 +26,36 @@ def update_ifc_file():
 
 class SaveNumber:
     
-    pset_names = []
+    pset_names = [("Custom", "Custom Pset", "")]
     pset_common_names = {}
     pset_qto = PsetQto(ifc_file.schema)
 
     @staticmethod
-    def get_number(element, props, numbers_cache=None):
+    def get_number(element, settings, numbers_cache=None):
         if element is None:
             return None
         if numbers_cache is None:
             numbers_cache = {}
         if get_id(element) in numbers_cache:
             return numbers_cache[get_id(element)]
-        if props.save_type == "Attribute":
-            return getattr(element, SaveNumber.get_attribute_name(props), None)
-        if props.save_type == "Pset":
-            pset_name = SaveNumber.get_pset_name(element, props)
+        if settings.get("save_type") == "Attribute":
+            return getattr(element, SaveNumber.get_attribute_name(settings), None)
+        if settings.get("save_type") == "Pset":
+            pset_name = SaveNumber.get_pset_name(element, settings)
             if (pset := get_pset(element, pset_name)):
-                return pset.get(props.property_name)
-            return None
-
+                return pset.get(settings.get("property_name"))
+        return None
+        
     @staticmethod
-    def save_number(element, number, props, numbers_cache=None):
+    def save_number(ifc_file, element, number, settings, numbers_cache=None):
         if element is None:
             return None
         if numbers_cache is None:
             numbers_cache = {}
-        if number == SaveNumber.get_number(element, props, numbers_cache):
+        if number == SaveNumber.get_number(element, settings, numbers_cache):
             return 0
-        if props.save_type == "Attribute":
-            attribute_name = SaveNumber.get_attribute_name(props)
+        if settings.get("save_type") == "Attribute":
+            attribute_name = SaveNumber.get_attribute_name(settings)
             if not hasattr(element, attribute_name):
                 return None
             if attribute_name == "Name" and number is None:
@@ -60,50 +63,50 @@ class SaveNumber:
             setattr(element, attribute_name, number)
             numbers_cache[get_id(element)] = number
             return 1
-        if props.save_type == "Pset":
-            pset_name = SaveNumber.get_pset_name(element, props)
+        if settings.get("save_type") == "Pset":
+            pset_name = SaveNumber.get_pset_name(element, settings)
             if not pset_name:
                 return None
             if pset := get_pset(element, pset_name):
                 pset = ifc_file.by_id(pset["id"])  
             else:
                 pset = ifc_api.run("pset.add_pset", ifc_file, product=element, name=pset_name)
-            ifc_api.run("pset.edit_pset", ifc_file, pset=pset, properties={props.property_name: number}, should_purge=True)
+            ifc_api.run("pset.edit_pset", ifc_file, pset=pset, properties={settings["property_name"]: number}, should_purge=True)
             if number is None and not pset.HasProperties:
                 ifc_api.run("pset.remove_pset", ifc_file, product=element, pset=pset)
             numbers_cache[get_id(element)] = number
             return 1
+        return None
 
     @staticmethod
-    def remove_number(element, props, numbers_cache=None):
-        count = SaveNumber.save_number(element, None, props, numbers_cache)
+    def remove_number(ifc_file, element, settings, numbers_cache=None):
+        count = SaveNumber.save_number(ifc_file, element, None, settings, numbers_cache)
         return int(count or 0)
 
-    def get_attribute_name(props):
-        if props.attribute_name == "Other":
-            return props.attribute_name_other
-        return props.attribute_name
+    def get_attribute_name(settings):
+        if settings.get("attribute_name") == "Other":
+            return settings.get("attribute_name_other")
+        return settings.get("attribute_name")
 
     @staticmethod
-    def get_pset_name(element, props):
-        if props.pset_name == "Common":
+    def get_pset_name(element, settings):
+        if settings.get("pset_name") == "Common":
             ifc_type = element.is_a()
             name = SaveNumber.pset_common_names.get(ifc_type, None)
             return name
-        if props.pset_name == "Custom Pset":
-            return props.custom_pset_name
-        return props.pset_name
+        if settings.get("pset_name") == "Custom Pset":
+            return settings.get("custom_pset_name")
+        return settings.get("pset_name")
 
     @staticmethod
     def update_pset_names(prop, context):
-        props = context.scene.ifc_numbering_settings
-        pset_names_sets = [set(SaveNumber.pset_qto.get_applicable_names(ifc_type)) for ifc_type in LoadSelection.get_selected_types(props)]
+        settings = Settings.to_dict(context.scene.bonsai_numbering_settings)
+        pset_names_sets = [set(SaveNumber.pset_qto.get_applicable_names(ifc_type)) for ifc_type in LoadSelection.get_selected_types(settings)]
         intersection = set.intersection(*pset_names_sets) if pset_names_sets else set()
         SaveNumber.pset_names = [('Custom Pset', 'Custom Pset', 'Store in custom Pset with selected name'),
                                  ('Common', 'Pset_Common', 'Store in Pset common of the type, e.g. Pset_WallCommon')] + \
                                 [(name, name, f"Store in Pset called {name}") for name in intersection]
         
-
     def get_pset_common_names(elements):
         SaveNumber.pset_common_names = {}
         pset_qto = PsetQto(ifc_file.schema)
@@ -129,24 +132,24 @@ class LoadSelection:
     possible_types = []
     
     @staticmethod
-    def get_parent_type(props):
-        """Get the parent type from the properties."""
-        if props.parent_type == "Other":
-            return props.parent_type_other
-        return props.parent_type
+    def get_parent_type(settings):
+        """Get the parent type from the settings."""
+        if settings.get("parent_type") == "Other":
+            return settings.get("parent_type_other")
+        return settings.get("parent_type")
 
     @staticmethod
-    def load_selected_objects(props):
+    def load_selected_objects(settings):
         """Load the selected objects based on the current context."""
-        objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
-        if props.visible_toggle:
+        objects = bpy.context.selected_objects if settings.get("selected_toggle") else bpy.context.scene.objects
+        if settings.get("visible_toggle"):
             objects = [obj for obj in objects if obj.visible_get()]
         return objects
 
     @staticmethod
-    def get_selected_types(props):
-        """Get the selected IFC types from the properties, processing if All types are selected"""
-        selected_types = list(props.selected_types)
+    def get_selected_types(settings):
+        """Get the selected IFC types from the settings, processing if All types are selected"""
+        selected_types = settings.get("selected_types", [])
         if "All" in selected_types:
             selected_types = [type_tuple[0] for type_tuple in LoadSelection.possible_types[1:]]
         return selected_types
@@ -181,8 +184,8 @@ class LoadSelection:
 
     @staticmethod
     def update_objects(prop, context):
-        props = context.scene.ifc_numbering_settings
-        ifc_types, number_counts = LoadSelection.load_possible_types(LoadSelection.selected_objects, LoadSelection.get_parent_type(props))
+        settings = Settings.to_dict(context.scene.bonsai_numbering_settings)
+        ifc_types, number_counts = LoadSelection.load_possible_types(LoadSelection.selected_objects, LoadSelection.get_parent_type(settings))
         LoadSelection.possible_types = [(id, name + f": {number_counts[id]}", "") for (id, name, _) in ifc_types]
         NumberFormatting.update_format_preview(prop, context)
         SaveNumber.update_pset_names(prop, context)
@@ -191,9 +194,10 @@ class LoadSelection:
     @staticmethod
     def get_possible_types(prop, context):
         """Return the list of available types for selection."""
-        props = context.scene.ifc_numbering_settings
+        props = context.scene.bonsai_numbering_settings
+        settings = {"selected_toggle": props.selected_toggle, "visible_toggle": props.visible_toggle}
         all_objects = list(bpy.context.scene.objects)
-        objects = LoadSelection.load_selected_objects(props)
+        objects = LoadSelection.load_selected_objects(settings)
         if all_objects != LoadSelection.all_objects or objects != LoadSelection.selected_objects:
             LoadSelection.all_objects = all_objects
             LoadSelection.selected_objects = objects
@@ -202,12 +206,12 @@ class LoadSelection:
 
 class Storeys:
 
-    save_type = "Pset"
-    pset_name = "Pset_Numbering"
-    property_name = "CustomStoreyNumber"
+    settings = {"save_type": "Pset",
+                "pset_name": "Pset_Numbering",
+                "property_name": "CustomStoreyNumber"}
 
     @staticmethod
-    def get_storeys(props):
+    def get_storeys(settings):
         """Get all storeys from the current scene."""
         storeys = []
         storey_locations = {}
@@ -215,15 +219,15 @@ class Storeys:
             element = tool.Ifc.get_entity(obj)
             if element is not None and element.is_a("IfcBuildingStorey"):
                 storeys.append(element)
-                storey_locations[element] = ObjectGeometry.get_object_location(obj, props)
-        storeys.sort(key=ft.cmp_to_key(lambda a, b: ObjectGeometry.cmp_within_precision(storey_locations[a], storey_locations[b], props, use_dir=False)))
+                storey_locations[element] = ObjectGeometry.get_object_location(obj, settings)
+        storeys.sort(key=ft.cmp_to_key(lambda a, b: ObjectGeometry.cmp_within_precision(storey_locations[a], storey_locations[b], settings, use_dir=False)))
         return storeys
 
     @staticmethod
     def update_custom_storey(props, context):
-        storeys = Storeys.get_storeys(props)
+        storeys = Storeys.get_storeys(Settings.to_dict(context.scene.bonsai_numbering_settings))
         storey = next((storey for storey in storeys if storey.Name == props.custom_storey), None)
-        number = SaveNumber.get_number(storey, Storeys)
+        number = SaveNumber.get_number(storey, Storeys.settings)
         if number is None: # If the number is not set, use the index
             number = storeys.index(storey)
         props["_custom_storey_number"] = int(number)
@@ -234,22 +238,24 @@ class Storeys:
 
     @staticmethod
     def set_custom_storey_number(props, value):
-        storeys = Storeys.get_storeys(props)
+        storeys = Storeys.get_storeys(Settings.to_dict(props))
         storey = next((storey for storey in storeys if storey.Name == props.custom_storey), None)
         index = storeys.index(storey)
         if value == index: # If the value is the same as the index, remove the number
-            SaveNumber.save_number(storey, None, Storeys)
+            SaveNumber.save_number(ifc_file, storey, None, Storeys.settings)
         else:
-            SaveNumber.save_number(storey, str(value), Storeys)
+            SaveNumber.save_number(ifc_file, storey, str(value), Storeys.settings)
         props["_custom_storey_number"] = value
 
     @staticmethod
-    def get_storey_number(element, storeys, props):
+    def get_storey_number(element, storeys, settings, storeys_numbers):
         storey_number = None
         if structure := getattr(element, "ContainedInStructure", None):
             storey = getattr(structure[0], "RelatingStructure", None)
-            if storey and props.storey_numbering == "custom":
-                storey_number = SaveNumber.get_number(storey, Storeys)
+            if storey and storeys_numbers:
+                storey_number = storeys_numbers.get(storey, None)
+            if storey and settings.get("storey_numbering") == "custom":
+                storey_number = SaveNumber.get_number(storey, Storeys.settings)
                 if storey_number is not None:
                     storey_number = int(storey_number)
             if storey_number is None:
@@ -261,16 +267,18 @@ class NumberFormatting:
     format_preview = ""
 
     @staticmethod
-    def format_number(props, number_values = (0, 0, None), max_number_values=(100, 100, 1), type_name=""):
+    def format_number(settings, number_values = (0, 0, None), max_number_values=(100, 100, 1), type_name=""):
         """Return the formatted number for the given element, type and storey number"""
-        format = props.format
+        format = settings.get("format", None)
+        if format is None:
+            return format
         if "{E}" in format:
-            format = format.replace("{E}", NumberingSystems.to_numbering_string(props.initial_element_number + number_values[0], props.element_numbering, max_number_values[0]))
+            format = format.replace("{E}", NumberingSystems.to_numbering_string(settings.get("initial_element_number", 0) + number_values[0], settings.get("element_numbering"), max_number_values[0]))
         if "{T}" in format:
-            format = format.replace("{T}", NumberingSystems.to_numbering_string(props.initial_type_number + number_values[1], props.type_numbering, max_number_values[1]))
+            format = format.replace("{T}", NumberingSystems.to_numbering_string(settings.get("initial_type_number", 0) + number_values[1], settings.get("type_numbering"), max_number_values[1]))
         if "{S}" in format:
             if number_values[2] is not None:
-                format = format.replace("{S}", NumberingSystems.to_numbering_string(props.initial_storey_number + number_values[2], props.storey_numbering, max_number_values[2]))
+                format = format.replace("{S}", NumberingSystems.to_numbering_string(settings.get("initial_storey_number", 0) + number_values[2], settings.get("storey_numbering"), max_number_values[2]))
             else:
                 format = format.replace("{S}", "x")
         if "[T]" in format and len(type_name) > 0:
@@ -282,13 +290,13 @@ class NumberFormatting:
         return format
 
     @staticmethod
-    def get_type_name(props):
+    def get_type_name(settings):
         """Return type name used in preview, based on selected types"""
-        if not props.selected_types:
+        if not settings.get("selected_types"):
             #If no types selected, return "Type"
             return "Type"
         #Get the type name of the selected type, excluding 'IfcElement'
-        types = props.selected_types
+        types = settings.get("selected_types")  
         if 'All' in types:
             types.remove('All')
         if len(types)>0:
@@ -301,28 +309,28 @@ class NumberFormatting:
         return "Type"
 
     @staticmethod
-    def get_max_numbers(props, type_name):
+    def get_max_numbers(settings, type_name):
         """Return number of selected elements used in preview, based on selected types"""
         max_element, max_type, max_storey = 0, 0, 0
-        if props.storey_numbering == 'number_ext':
-            max_storey = len(Storeys.get_storeys(props))
-        if props.element_numbering == 'number_ext' or props.type_numbering == 'number_ext':
-            if not props.selected_types:
+        if settings.get("storey_numbering") == 'number_ext':
+            max_storey = len(Storeys.get_storeys(settings))
+        if settings.get("element_numbering") == 'number_ext' or settings.get("type_numbering") == 'number_ext':
+            if not settings.get("selected_types"):
                 return max_element, max_type, max_storey
             type_counts = {type_tuple[0]: int(''.join([c for c in type_tuple[1] if c.isdigit()])) \
                            for type_tuple in LoadSelection.possible_types}
-            if "All" in props.selected_types:
-                max_element = type_counts.get("All", 0) 
+            if "All" in settings.get("selected_types"):
+                max_element = type_counts.get("All", 0)
             else:
-                max_element = sum(type_counts.get(t, 0) for t in LoadSelection.get_selected_types(props))
+                max_element = sum(type_counts.get(t, 0) for t in LoadSelection.get_selected_types(settings))
             max_type = type_counts.get('Ifc' + type_name, max_element)
         return max_element, max_type, max_storey
 
     @staticmethod
     def update_format_preview(prop, context):
-        props = context.scene.ifc_numbering_settings
-        type_name = NumberFormatting.get_type_name(props)
-        NumberFormatting.format_preview = NumberFormatting.format_number(props, (0, 0, 0), NumberFormatting.get_max_numbers(props, type_name), type_name)
+        settings = Settings.to_dict(context.scene.bonsai_numbering_settings)
+        type_name = NumberFormatting.get_type_name(settings)
+        NumberFormatting.format_preview = NumberFormatting.format_number(settings, (0, 0, 0), NumberFormatting.get_max_numbers(settings, type_name), type_name)
 
 class NumberingSystems:
     
@@ -387,7 +395,7 @@ class NumberingSystems:
         numbers = [NumberingSystems.to_numbering_string(i, numbering_system, 10) for i in range(initial, initial + 3)]
         return "{0}, {1}, {2}, ...".format(*numbers)
 
-class IFC_NumberingSettings(bpy.types.PropertyGroup):
+class BonsaiNumberingSettings(bpy.types.PropertyGroup):
     settings_name : bpy.props.StringProperty(
         name="Settings name",
         description="Name for saving the current settings",
@@ -572,13 +580,13 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
     custom_storey: bpy.props.EnumProperty(
         name = "Storey",
         description = "Select storey to number",
-        items = lambda self, _: [(storey.Name, storey.Name, f"{storey.Name}\nID: {storey.GlobalId}") for storey in Storeys.get_storeys(self)],
+        items = lambda self, _: [(storey.Name, storey.Name, f"{storey.Name}\nID: {storey.GlobalId}") for storey in Storeys.get_storeys(Settings.to_dict(self))],
         update = Storeys.update_custom_storey
     ) # pyright: ignore[reportInvalidTypeForm]
 
     custom_storey_number: bpy.props.IntProperty(
         name = "Storey number",
-        description = f"Set custom storey number for selected storey, stored in {Storeys.pset_name} in the IFC element",
+        description = f"Set custom storey number for selected storey, stored in {Storeys.settings['pset_name']} in the IFC element",
         get = Storeys.get_custom_storey_number,
         set = Storeys.set_custom_storey_number
     ) # pyright: ignore[reportInvalidTypeForm]
@@ -664,14 +672,14 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         box.label(text="Settings")
         grid = box.grid_flow(row_major=True, align=True, columns=4, even_columns=True)
         grid.prop(self, "settings_name", text="Name")
-        grid.operator("ifc.save_settings", icon="FILE_TICK", text="Save")
-        grid.operator("ifc.clear_settings", icon="CANCEL", text="Clear")
-        grid.operator("ifc.export_settings", icon="EXPORT", text="Export")
+        grid.operator("bonsai.save_settings", icon="FILE_TICK", text="Save")
+        grid.operator("bonsai.clear_settings", icon="CANCEL", text="Clear")
+        grid.operator("bonsai.export_settings", icon="EXPORT", text="Export")
 
         grid.prop(self, "saved_settings", text="")
-        grid.operator("ifc.load_settings", icon="FILE_REFRESH", text="Load")
-        grid.operator("ifc.delete_settings", icon="TRASH", text="Delete")
-        grid.operator("ifc.import_settings", icon="IMPORT", text="Import")
+        grid.operator("bonsai.load_settings", icon="FILE_REFRESH", text="Load")
+        grid.operator("bonsai.delete_settings", icon="TRASH", text="Delete")
+        grid.operator("bonsai.import_settings", icon="IMPORT", text="Import")
         
         # Selection box
         box = layout.box()
@@ -762,30 +770,31 @@ class IFC_NumberingSettings(bpy.types.PropertyGroup):
         # Actions
         layout.separator()
         row = layout.row(align=True)
-        row.operator("ifc.assign_numbers", icon="TAG", text="Assign numbers")
+        row.operator("bonsai.assign_numbers", icon="TAG", text="Assign numbers")
         row = layout.row(align=True)
-        row.operator("ifc.remove_numbers", icon="X", text="Remove numbers")
+        row.operator("bonsai.remove_numbers", icon="X", text="Remove numbers")
 
 class ObjectGeometry:
     @staticmethod
-    def get_object_location(obj, props):
+    def get_object_location(obj, settings):
         """Get the location of a Blender object."""
         mat = obj.matrix_world
         bbox_vectors = [mat @ Vector(b) for b in obj.bound_box]
 
-        if props.location_type == "CENTER":
+        if settings.get("location_type", "CENTER") == "CENTER":
             return 0.125 * sum(bbox_vectors, Vector())
 
-        elif props.location_type == "BOUNDING_BOX":
+        elif settings.get("location_type") == "BOUNDING_BOX":
             bbox_vector = Vector((0, 0, 0))
             # Determine the coordinates based on the direction and axis order
-            direction = (int(props.x_direction), int(props.y_direction), int(props.z_direction))
+            direction = (int(settings.get("x_direction")), int(settings.get("y_direction")), int(settings.get("z_direction")))
             for i in range(3):
-                if direction[i] == 1:
-                    bbox_vector[i] = min(v[i] for v in bbox_vectors)
-                else:
+                if direction[i] == -1:
                     bbox_vector[i] = max(v[i] for v in bbox_vectors)
+                else:
+                    bbox_vector[i] = min(v[i] for v in bbox_vectors)
             return bbox_vector
+        
 
     @staticmethod
     def get_object_dimensions(obj):
@@ -803,38 +812,75 @@ class ObjectGeometry:
         return dimensions
 
     @staticmethod
-    def cmp_within_precision(a, b, props, use_dir=True):
+    def cmp_within_precision(a, b, settings, use_dir=True):
         """Compare two vectors within a given precision."""
-        direction = (int(props.x_direction), int(props.y_direction), int(props.z_direction)) if use_dir else (1, 1, 1)
-        for axis in props.axis_order:
+        direction = (int(settings.get("x_direction", 1)), int(settings.get("y_direction", 1)), int(settings.get("z_direction", 1))) if use_dir else (1, 1, 1)
+        for axis in settings.get("axis_order", "XYZ"):
             idx = "XYZ".index(axis)
             diff = (a[idx] - b[idx]) * direction[idx]
-            if 1000 * abs(diff) > props.precision[idx]:
+            if 1000 * abs(diff) > settings.get("precision", [0, 0, 0])[idx]:
                 return 1 if diff > 0 else -1
         return 0
+
+class ElementGeometry:
+    @staticmethod
+    def get_element_location(element, settings):
+        """Get the location of an IFC element."""
+        geom_settings = geom.settings()
+        geom_settings.set("use-world-coords", True)
+        shape = geom.create_shape(geom_settings, element)
+
+        verts = ifc_shape.get_shape_vertices(shape, shape.geometry)
+        if settings.get("location_type") == "CENTER":
+            return np.mean(verts, axis=0)
+        
+        elif settings.get("location_type") == "BOUNDING_BOX":
+            direction = (int(settings.get("x_direction", 1)), int(settings.get("y_direction", 1)), int(settings.get("z_direction", 1)))
+            bbox_min = np.min(verts, axis=0)
+            bbox_max = np.max(verts, axis=0)
+            bbox_vector = np.zeros(3)
+            for i in range(3):
+                if direction[i] == -1:
+                    bbox_vector[i] = bbox_max[i]
+                else:
+                    bbox_vector[i] = bbox_min[i]
+            return bbox_vector
+        
+
+    @staticmethod
+    def get_element_dimensions(element):
+        """Get the dimensions of an IFC element."""
+        geom_settings = geom.settings()
+        geom_settings.set("use-world-coords", True)
+        shape = geom.create_shape(geom_settings, element)
+
+        verts = ifc_shape.get_shape_vertices(shape, shape.geometry)
+        bbox_min = np.min(verts, axis=0)
+        bbox_max = np.max(verts, axis=0)
+        return bbox_max - bbox_min
 
 class UndoOperator:
     @staticmethod
     def execute_with_undo(operator, context, method):
         """Execute a method with undo support."""
         IfcStore.begin_transaction(operator)
-        props = context.scene.ifc_numbering_settings
+        settings = Settings.to_dict(context.scene.bonsai_numbering_settings)
 
-        parent_type = LoadSelection.get_parent_type(props)
+        parent_type = LoadSelection.get_parent_type(settings)
         try: 
             elements = ifc_file.by_type(parent_type)
         except RuntimeError:
             operator.report({'ERROR'}, f"Parent type {parent_type} not found in {ifc_file.schema} schema.")
             return {'CANCELLED'}
-        
-        if props.pset_name == "Common":
+
+        if settings.get("pset_name") == "Common":
             SaveNumber.get_pset_common_names(elements)
 
-        old_numbers = {get_id(element): SaveNumber.get_number(element, props) for element in elements}
+        old_numbers = {get_id(element): SaveNumber.get_number(element, settings) for element in elements}
         new_numbers = old_numbers.copy()
 
-        result = method(props, new_numbers)
-        
+        result = method(settings, new_numbers)
+
         operator.transaction_data = {"old_value": old_numbers, "new_value": new_numbers}
         IfcStore.add_transaction_operation(operator)
         IfcStore.end_transaction(operator)
@@ -847,120 +893,155 @@ class UndoOperator:
     def rollback(operator, data):
         """Support undo of number assignment"""
         rollback_count = 0
-        props = bpy.context.scene.ifc_numbering_settings
-        for element in ifc_file.by_type(LoadSelection.get_parent_type(props)):
+        settings = Settings.to_dict(bpy.context.scene.bonsai_numbering_settings)
+        for element in ifc_file.by_type(LoadSelection.get_parent_type(settings)):
             old_number = data["old_value"].get(get_id(element), None)
-            rollback_count += int(SaveNumber.save_number(element, old_number, props, data["new_value"]) or 0)
-        bpy.ops.ifc.show_message('EXEC_DEFAULT', message=f"Rollback {rollback_count} numbers.")
+            rollback_count += int(SaveNumber.save_number(ifc_file, element, old_number, settings, data["new_value"]) or 0)
+        bpy.ops.bonsai.show_message('EXEC_DEFAULT', message=f"Rollback {rollback_count} numbers.")
     
     @staticmethod
     def commit(operator, data):
         """Support redo of number assignment"""
         commit_count = 0
-        props = bpy.context.scene.ifc_numbering_settings
+        settings = Settings.to_dict(bpy.context.scene.bonsai_numbering_settings)
         for obj in bpy.context.scene.objects:
             element = tool.Ifc.get_entity(obj)
-            if element is not None and element.is_a(LoadSelection.get_parent_type(props)):
+            if element is not None and element.is_a(LoadSelection.get_parent_type(settings)):
                 new_number = data["new_value"].get(obj.name, None)
-                commit_count += int(SaveNumber.save_number(element, new_number, props, data["old_value"]) or 0)
-        bpy.ops.ifc.show_message('EXEC_DEFAULT', message=f"Commit {commit_count} numbers.")
-    
-class IFC_AssignNumbers(bpy.types.Operator):
-    bl_idname = "ifc.assign_numbers"
+                commit_count += int(SaveNumber.save_number(ifc_file, element, new_number, settings, data["old_value"]) or 0)
+        bpy.ops.bonsai.show_message('EXEC_DEFAULT', message=f"Commit {commit_count} numbers.")
+  
+class BonsaiAssignNumbers(bpy.types.Operator):
+    bl_idname = "bonsai.assign_numbers"
     bl_label = "Assign numbers"
     bl_description = "Assign numbers to selected objects"
     bl_options = {"REGISTER", "UNDO"}
 
-    def assign_numbers(self, props, numbers_cache):
-        """Assign numbers to selected objects based on their IFC type and location."""
+    def number_elements(elements, ifc_file, settings, elements_locations = None, elements_dimensions = None, storeys = None, numbers_cache = {}, storeys_numbers={}, report=None):
+        """Number elements in the IFC file with the provided settings. If element locations or dimensions are specified, these are used for sorting.
+        Providing numbers_cache, a dictionary with element-> currently saved number, speeds up execution.
+        If storeys_numbers is provided, as a dictionary storey->number, this is used for assigning storey numbers."""
+        if report is None:
+            def report(report_type, message):
+                if report_type == {"INFO"}:
+                    print("INFO: ", message)
+                if report_type == {"WARNING"}:
+                    raise Exception(message)
+        if storeys is None:
+            storeys = []
+
         number_count = 0
-        remove_count = 0
 
-        if props.remove_toggle:
-            for obj in bpy.context.scene.objects:
-                if (props.selected_toggle and obj not in bpy.context.selected_objects) or \
-                (props.visible_toggle and not obj.visible_get()):
-                    element = tool.Ifc.get_entity(obj)
-                    if element is not None and element.is_a(LoadSelection.get_parent_type(props)):
-                        count_diff = SaveNumber.remove_number(element, props, numbers_cache)
-                        remove_count += count_diff
+        if elements_dimensions:
+            elements.sort(key=ft.cmp_to_key(lambda a, b: ObjectGeometry.cmp_within_precision(elements_dimensions[a], elements_dimensions[b], settings, use_dir=False)))
+        if elements_locations:
+            elements.sort(key=ft.cmp_to_key(lambda a, b: ObjectGeometry.cmp_within_precision(elements_locations[a], elements_locations[b], settings)))
 
-        objects = LoadSelection.load_selected_objects(props)
+        selected_types = LoadSelection.get_selected_types(settings)
 
-        if not objects:
-            self.report({'WARNING'}, f"No objects selected or available for numbering, removed {remove_count} existing numbers.")
-            return {'CANCELLED'}
-        
-        selected_types = LoadSelection.get_selected_types(props)
-        possible_types = [tupl[0] for tupl in LoadSelection.possible_types]
-        
-        selected_elements = []
-        elements_locations = {}
-        elements_geometries = {}
-        for obj in objects: 
-            element = tool.Ifc.get_entity(obj)
-            if element is None:
-                continue
-            if element.is_a() in selected_types:
-                selected_elements.append(element)
-                elements_locations[element] = ObjectGeometry.get_object_location(obj, props)
-                elements_geometries[element] = ObjectGeometry.get_object_dimensions(obj)
-            elif props.remove_toggle and element.is_a() in possible_types:
-                remove_count += SaveNumber.remove_number(element, props, numbers_cache)
+        if not selected_types:
+            selected_types = list(set(element.is_a() for element in elements))
 
-        if not selected_elements:
-            self.report({'WARNING'}, f"No elements selected or available for numbering, removed {remove_count} existing numbers.")
-            return {'CANCELLED'}
-
-        selected_elements.sort(key=ft.cmp_to_key(lambda a, b: ObjectGeometry.cmp_within_precision(elements_geometries[a], elements_geometries[b], props, use_dir=False)))
-        selected_elements.sort(key=ft.cmp_to_key(lambda a, b: ObjectGeometry.cmp_within_precision(elements_locations[a], elements_locations[b], props)))
-
-        storeys = Storeys.get_storeys(props)
-
-        elements_by_type = [[element for element in selected_elements if element.is_a() == ifc_type] for ifc_type in selected_types]
+        elements_by_type = [[element for element in elements if element.is_a() == ifc_type] for ifc_type in selected_types]
 
         failed_types = set()
-        for (element_number, element) in enumerate(selected_elements):
+        for (element_number, element) in enumerate(elements):
 
             type_index = selected_types.index(element.is_a())
             type_elements = elements_by_type[type_index]
             type_number = type_elements.index(element)
             type_name = selected_types[type_index][3:]
 
-            storey_number = Storeys.get_storey_number(element, storeys, props)
-            if storey_number is None and "{S}" in props.format:
-                self.report({'WARNING'}, f"Element {getattr(element, 'Name', '')} of type {element.is_a()} with ID {get_id(element)} is not contained in any storey.")
-
-            number = NumberFormatting.format_number(props, (element_number, type_number, storey_number), (len(objects), len(type_elements), len(storeys)), type_name)
-            count = SaveNumber.save_number(element, number, props, numbers_cache)
+            if storeys:
+                storey_number = Storeys.get_storey_number(element, storeys, settings, storeys_numbers)
+                if storey_number is None and "{S}" in settings.get("format"):
+                    if report is not None:
+                        report({'WARNING'}, f"Element {getattr(element, 'Name', '')} of type {element.is_a()} with ID {get_id(element)} is not contained in any storey.")
+                    else:
+                        raise Exception(f"Element {getattr(element, 'Name', '')} of type {element.is_a()} with ID {get_id(element)} is not contained in any storey.")
+            else:
+                storey_number = None
+            
+            number = NumberFormatting.format_number(settings, (element_number, type_number, storey_number), (len(elements), len(type_elements), len(storeys)), type_name)
+            count = SaveNumber.save_number(ifc_file, element, number, settings, numbers_cache)
             if count is None:
-                self.report({'WARNING'}, f"Failed to save number for element {getattr(element, 'Name', '')} of type {element.is_a()} with ID {get_id(element)}.")
+                report({'WARNING'}, f"Failed to save number for element {getattr(element, 'Name', '')} of type {element.is_a()} with ID {get_id(element)}.")
                 failed_types.add(element.is_a())
             else:
                 number_count += count
-        
-        if props.remove_toggle: 
-            self.report({'INFO'}, f"Renumbered {number_count} objects, removed number from {remove_count} objects.")
-        else:
-            self.report({'INFO'}, f"Renumbered {number_count} objects.")
-            
-        if failed_types:
-            self.report({'WARNING'}, f"Failed to renumber the following types: {failed_types}")
 
-        if props.check_duplicates_toggle:
-            #Check for duplicate numbers
+        if failed_types:
+            report({'WARNING'}, f"Failed to renumber the following types: {failed_types}")
+
+        if settings.get("remove_toggle"):
+            report({'INFO'}, f"Renumbered {number_count} objects, removed number from {remove_count} objects.")
+        else:
+            report({'INFO'}, f"Renumbered {number_count} objects.")
+
+        return {'FINISHED'}, number_count
+
+    def assign_numbers(self, settings, numbers_cache):
+        """Assign numbers to selected objects based on their IFC type and location."""
+        remove_count = 0
+
+        if settings.get("remove_toggle"):
+            for obj in bpy.context.scene.objects:
+                if (settings.get("selected_toggle") and obj not in bpy.context.selected_objects) or \
+                (settings.get("visible_toggle") and not obj.visible_get()):
+                    element = tool.Ifc.get_entity(obj)
+                    if element is not None and element.is_a(LoadSelection.get_parent_type(settings)):
+                        count_diff = SaveNumber.remove_number(ifc_file, element, settings, numbers_cache)
+                        remove_count += count_diff
+
+        objects = LoadSelection.load_selected_objects(settings)
+
+        if not objects:
+            self.report({'WARNING'}, f"No objects selected or available for numbering, removed {remove_count} existing numbers.")
+            return {'CANCELLED'}
+        
+        selected_types = LoadSelection.get_selected_types(settings)
+        possible_types = [tupl[0] for tupl in LoadSelection.possible_types]
+        
+        selected_elements = []
+        elements_locations = {}
+        elements_dimensions = {}
+        for obj in objects: 
+            element = tool.Ifc.get_entity(obj)
+            if element is None:
+                continue
+            if element.is_a() in selected_types:
+                selected_elements.append(element)
+                elements_locations[element] = ObjectGeometry.get_object_location(obj, settings)
+                elements_dimensions[element] = ObjectGeometry.get_object_dimensions(obj)
+            elif settings.get("remove_toggle") and element.is_a() in possible_types:
+                remove_count += SaveNumber.remove_number(ifc_file, element, settings, numbers_cache)
+        
+        if not selected_elements:
+            self.report({'WARNING'}, f"No elements selected or available for numbering, removed {remove_count} existing numbers.")
+
+        storeys = Storeys.get_storeys(settings)
+        res, number_count = BonsaiAssignNumbers.number_elements(selected_elements, 
+                                                                ifc_file, settings, 
+                                                                elements_locations, 
+                                                                elements_dimensions,  
+                                                                storeys, 
+                                                                numbers_cache,
+                                                                report = self.report)
+
+        if settings.get("check_duplicates_toggle"):
             numbers = []
             for obj in bpy.context.scene.objects:
                 element = tool.Ifc.get_entity(obj)
-                if element is None or not element.is_a(LoadSelection.get_parent_type(props)):
+                if element is None or not element.is_a(LoadSelection.get_parent_type(settings)):
                     continue
-                number = SaveNumber.get_number(element, props, numbers_cache)
+                number = SaveNumber.get_number(element, settings, numbers_cache)
                 if number in numbers:
                     self.report({'WARNING'}, f"The model contains duplicate numbers")
-                    break
+                    return {'FINISHED'}
                 if number is not None:
                     numbers.append(number)
-        return {'FINISHED'}
+
+        return res
 
     def execute(self, context):
         return UndoOperator.execute_with_undo(self, context, self.assign_numbers)
@@ -971,18 +1052,18 @@ class IFC_AssignNumbers(bpy.types.Operator):
     def commit(self, data):
         UndoOperator.commit(self, data)
 
-class IFC_RemoveNumbers(bpy.types.Operator):
-    bl_idname = "ifc.remove_numbers"
+class BonsaiRemoveNumbers(bpy.types.Operator):
+    bl_idname = "bonsai.remove_numbers"
     bl_label = "Remove numbers"
     bl_description = "Remove numbers from selected objects, from the selected attribute or Pset"
     bl_options = {"REGISTER", "UNDO"}
 
-    def remove_numbers(self, props, numbers_cache):
+    def remove_numbers(self, settings, numbers_cache):
         """Remove numbers from selected objects"""
         remove_count = 0
 
-        objects = bpy.context.selected_objects if props.selected_toggle else bpy.context.scene.objects
-        if props.visible_toggle:
+        objects = bpy.context.selected_objects if settings.get("selected_toggle") else bpy.context.scene.objects
+        if settings.get("visible_toggle"):
             objects = [obj for obj in objects if obj.visible_get()]
 
         if not objects:
@@ -991,8 +1072,8 @@ class IFC_RemoveNumbers(bpy.types.Operator):
             
         for obj in objects:
             element = tool.Ifc.get_entity(obj)
-            if element is not None and element.is_a(LoadSelection.get_parent_type(props)):
-                remove_count += SaveNumber.remove_number(element, props, numbers_cache)
+            if element is not None and element.is_a(LoadSelection.get_parent_type(settings)):
+                remove_count += SaveNumber.remove_number(ifc_file, element, settings, numbers_cache)
                 numbers_cache[get_id(element)] = None
 
         if remove_count == 0:
@@ -1011,8 +1092,8 @@ class IFC_RemoveNumbers(bpy.types.Operator):
     def commit(self, data):
         UndoOperator.commit(self, data)
 
-class IFC_ShowMessage(bpy.types.Operator):
-    bl_idname = "ifc.show_message"
+class BonsaiShowMessage(bpy.types.Operator):
+    bl_idname = "bonsai.show_message"
     bl_label = "Show Message"
     bl_description = "Show a message in the info area"
     message: bpy.props.StringProperty() # pyright: ignore[reportInvalidTypeForm]
@@ -1027,8 +1108,37 @@ class Settings:
 
     settings_names = None
     
+    def import_settings(filepath):
+        """Import settings from a JSON file, e.g. as exported from the UI"""
+        with open(filepath, 'r') as file:
+            settings = json.load(file)
+        return settings
+
+    def default_settings():
+        """"Return a default dictionary of settings for numbering elements."""
+        return {
+            "x_direction": 1,
+            "y_direction": 1,
+            "z_direction": 1,
+            "axis_order": "ZYX",
+            "location_type": "CENTER",
+            "precision": (1, 1, 1),
+            "initial_element_number": 1,
+            "initial_type_number": 1,
+            "initial_storey_number": 0,
+            "element_numbering": "number",
+            "type_numbering": "number",
+            "storey_numbering": "number",
+            "format": "E{E}S{S}[T]{T}",
+            "save_type": "Attribute",
+            "attribute_name": "Tag",
+            "pset_name": "Common",
+            "custom_pset_name": "Pset_Numbering",
+            "property_name": "Number"
+            }
+    
     @staticmethod
-    def get_dict(props):
+    def to_dict(props):
         """Convert the properties to a dictionary for saving."""
         return {
             "selected_toggle": props.selected_toggle,
@@ -1060,7 +1170,7 @@ class Settings:
             }
 
     @staticmethod
-    def save_settings(operator, props):
+    def save_settings(operator, props, ifc_file):
         """Save the numbering settings to the IFC file."""
         # Save multiple settings by name in a dictionary
         project = ifc_file.by_type("IfcProject")[0]
@@ -1075,7 +1185,7 @@ class Settings:
         if not pset_settings:
             operator.report({'ERROR'}, "Could not create property set")
             return {'CANCELLED'}
-        ifc_api.run("pset.edit_pset", ifc_file, pset=pset_settings, properties={settings_name: json.dumps(Settings.get_dict(props))})
+        ifc_api.run("pset.edit_pset", ifc_file, pset=pset_settings, properties={settings_name: json.dumps(Settings.to_dict(props))})
         Settings.settings_names.add(settings_name)
         operator.report({'INFO'}, f"Saved settings '{settings_name}' to IFCProject element")
         return {'FINISHED'}
@@ -1103,7 +1213,7 @@ class Settings:
         return Settings.settings_names
 
     @staticmethod
-    def load_settings(operator, props):
+    def load_settings(operator, props, ifc_file):
         # Load selected settings by name
         settings_name = props.saved_settings
         if settings_name == "NONE":
@@ -1158,50 +1268,50 @@ class Settings:
             operator.report({'WARNING'}, "No settings found")
             return {'CANCELLED'}
 
-class IFC_SaveSettings(bpy.types.Operator):
-    bl_idname = "ifc.save_settings"
+class BonsaiSaveSettings(bpy.types.Operator):
+    bl_idname = "bonsai.save_settings"
     bl_label = "Save Settings"
     bl_description = f"Save the current numbering settings to {Settings.pset_name} of the IFC Project element, under the selected name"
 
     def execute(self, context):
-        props = context.scene.ifc_numbering_settings
-        return Settings.save_settings(self, props)
+        props = context.scene.bonsai_numbering_settings
+        return Settings.save_settings(self, props, ifc_file)
     
-class IFC_LoadSettings(bpy.types.Operator):
-    bl_idname = "ifc.load_settings"
+class BonsaiLoadSettings(bpy.types.Operator):
+    bl_idname = "bonsai.load_settings"
     bl_label = "Load Settings"
     bl_description = f"Load the selected numbering settings from {Settings.pset_name} of the IFC Project element"
 
     def execute(self, context):
-        props = context.scene.ifc_numbering_settings
-        return Settings.load_settings(self, props)
+        props = context.scene.bonsai_numbering_settings
+        return Settings.load_settings(self, props, ifc_file)
 
-class IFC_DeleteSettings(bpy.types.Operator):
-    bl_idname = "ifc.delete_settings"
+class BonsaiDeleteSettings(bpy.types.Operator):
+    bl_idname = "bonsai.delete_settings"
     bl_label = "Delete Settings"
     bl_description = f"Delete the selected numbering settings from {Settings.pset_name} of the IFC Project element"
 
     def execute(self, context):
-        props = context.scene.ifc_numbering_settings
+        props = context.scene.bonsai_numbering_settings
         return Settings.delete_settings(self, props)
 
-class IFC_ClearSettings(bpy.types.Operator):
-    bl_idname = "ifc.clear_settings"
+class BonsaiClearSettings(bpy.types.Operator):
+    bl_idname = "bonsai.clear_settings"
     bl_label = "Clear Settings"
     bl_description = f"Remove the {Settings.pset_name} Pset and all the saved settings from the IFC Project element"
 
     def execute(self, context):
-        props = context.scene.ifc_numbering_settings
+        props = context.scene.bonsai_numbering_settings
         return Settings.clear_settings(self, props)
 
-class IFC_ExportSettings(bpy.types.Operator):
-    bl_idname = "ifc.export_settings"
+class BonsaiExportSettings(bpy.types.Operator):
+    bl_idname = "bonsai.export_settings"
     bl_label = "Export Settings"
     bl_description = f"Export the current numbering settings to a JSON file"
     filepath: bpy.props.StringProperty(subtype="FILE_PATH") # pyright: ignore[reportInvalidTypeForm]
 
     def execute(self, context):
-        props = context.scene.ifc_numbering_settings
+        props = context.scene.bonsai_numbering_settings
         with open(self.filepath, 'w') as f:
             json.dump(Settings.settings_dict(props), f)
         self.report({'INFO'}, f"Exported settings to {self.filepath}")
@@ -1212,15 +1322,15 @@ class IFC_ExportSettings(bpy.types.Operator):
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
     
-class IFC_ImportSettings(bpy.types.Operator):
-    bl_idname = "ifc.import_settings"
+class BonsaiImportSettings(bpy.types.Operator):
+    bl_idname = "bonsai.import_settings"
     bl_label = "Import Settings"
     bl_description = f"Import numbering settings from a JSON file"
 
     filepath: bpy.props.StringProperty(subtype="FILE_PATH") # pyright: ignore[reportInvalidTypeForm]
 
     def execute(self, context):
-        props = context.scene.ifc_numbering_settings
+        props = context.scene.bonsai_numbering_settings
         with open(self.filepath, 'r') as f:
             settings = json.load(f)
             Settings.read_settings(self, settings, props)
@@ -1232,30 +1342,46 @@ class IFC_ImportSettings(bpy.types.Operator):
         return {'RUNNING_MODAL'}
 
 # UI Panel (where you see it)
-class IFCNumberingTool(bpy.types.Panel):
+class BonsaiNumberingTool(bpy.types.Panel):
     bl_label = "Number Assignment Tool"
-    bl_idname = "VIEW3D_PT_bonsai_ifc_numbering_tool"
+    bl_idname = "VIEW3D_PT_bonsai_numbering_tool"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = 'Numbering tool'  # This becomes the tab name!
 
     def draw(self, context):
         layout = self.layout
-        props = context.scene.ifc_numbering_settings
+        props = context.scene.bonsai_numbering_settings
         props.draw(layout)
 
 # Registration
-classes = [IFC_AssignNumbers, IFC_RemoveNumbers, IFC_SaveSettings, IFC_LoadSettings, IFC_ExportSettings, IFC_ImportSettings, IFC_DeleteSettings, IFC_ClearSettings,
-           IFC_ShowMessage, IFC_NumberingSettings, IFCNumberingTool]
+classes = [BonsaiAssignNumbers, BonsaiRemoveNumbers, BonsaiSaveSettings, BonsaiLoadSettings, BonsaiExportSettings, BonsaiImportSettings, BonsaiDeleteSettings, BonsaiClearSettings,
+           BonsaiShowMessage, BonsaiNumberingSettings, BonsaiNumberingTool]
 
 def register():   
     for cls in classes:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.ifc_numbering_settings = bpy.props.PointerProperty(type=IFC_NumberingSettings)
+    bpy.types.Scene.bonsai_numbering_settings = bpy.props.PointerProperty(type=BonsaiNumberingSettings)
 
 def unregister():
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
-    del bpy.types.Scene.ifc_numbering_settings
+    del bpy.types.Scene.bonsai_numbering_settings
 
 register()
+
+'''
+#Example usage outside Blender UI
+
+ifc_file = ifcopenshell.open("path/to/your.ifc")
+SaveNumber.pset_qto = PsetQto(ifc_file.schema)
+
+elements = ifc_file.by_type("IfcBeam")
+settings = Settings.default_settings()
+settings["format"] = "E{E}"
+
+elements_locations = {element: ElementGeometry.get_element_location(element, settings) for element in elements}
+elements_dimensions = {element: ElementGeometry.get_element_dimensions(element) for element in elements}
+
+BonsaiAssignNumbers.number_elements(elements, ifc_file, settings, elements_locations, elements_dimensions)
+'''
